@@ -1,0 +1,343 @@
+
+import os
+import tkinter as tk
+from tkinter import filedialog, messagebox
+import subprocess
+
+#Resolution change
+
+def modify_resolution_in_folder(folder_path, new_resolution):
+    for root, dirs, files in os.walk(folder_path):
+        for file in files:
+            if file.endswith("_extern.inf"):
+                file_path = os.path.join(root, file)
+                with open(file_path, 'r') as f:
+                    lines = f.readlines()
+                modified_lines = []
+                for line in lines:
+                    if line.startswith("Resolution"):
+                        modified_lines.append("Resolution\t\t\t{:.2f}\n".format(new_resolution))
+                    else:
+                        modified_lines.append(line)
+                with open(file_path, 'w') as f:
+                    f.writelines(modified_lines)
+
+def generate_files(input_folder, apex3d_output_folder, plgs_final_output_folder, le_threshold_counts, he_threshold_counts, starting_rt_min, ending_rt_min, trendline_ranges, modify_resolution, lockmass_z1_value, lockmass_z2_value, is_single_pass):
+    if not os.path.exists(apex3d_output_folder):
+        os.makedirs(apex3d_output_folder)
+    if not os.path.exists(plgs_final_output_folder):
+        os.makedirs(plgs_final_output_folder)
+    
+    batch_file_folder = os.path.join(os.path.dirname(input_folder), "batch_files")
+    if not os.path.exists(batch_file_folder):
+        os.makedirs(batch_file_folder)
+
+    if is_single_pass:
+        batch_file_name = "SinglePass_PLGS_Processing_commands.bat"
+        notepad_file_name = "SinglePass_PLGS_Processing_commands.txt"
+    else:
+        batch_file_name = "MultiPass_PLGS_Processing_commands.bat"
+        notepad_file_name = "MultiPass_PLGS_Processing_commands.txt"
+    
+    notepad_file_path = os.path.join(batch_file_folder, notepad_file_name)
+    batch_file_path = os.path.join(batch_file_folder, batch_file_name)
+
+    if modify_resolution:
+        modify_resolution_in_folder(input_folder, 40000)
+        
+#Batch files for Apex3D/Peptide 3D
+        
+    with open(notepad_file_path, "w") as notepad_file, open(batch_file_path, "w") as batch_file:
+        raw_folders = find_raw_folders(input_folder)
+        
+        for raw_folder in raw_folders:
+            raw_folder_name = os.path.basename(raw_folder)
+            raw_file_name = raw_folder_name.split('.')[0]
+            bin_file_name = f"{raw_file_name}_Apex3D.bin"
+            
+            if is_single_pass:
+                apex_command = f'"C:\\PLGS3.0.3\\lib\\apex3d\\Apex3d64.exe" -pRawDirName "{raw_folder}" -outputDirName "{apex3d_output_folder}" -outputUserDirName "{apex3d_output_folder}"'
+                if lockmass_z1_value:
+                    apex_command += f' -lockMassZ1 {lockmass_z1_value}'
+                if lockmass_z2_value:
+                    apex_command += f' -lockMassZ2 {lockmass_z2_value}'
+                apex_command += f' -lockMassToleranceAMU 0.3'
+                if le_threshold_counts != 0:
+                    apex_command += f' -leThresholdCounts {le_threshold_counts}'
+                if he_threshold_counts != 0:
+                    apex_command += f' -heThresholdCounts {he_threshold_counts}'
+                if starting_rt_min != 0:
+                    apex_command += f' -startingRTMin {starting_rt_min}'
+                if ending_rt_min != 0:
+                    apex_command += f' -endingRTMin {ending_rt_min}'
+                
+                apex_command += ' -PLGS\n'
+                notepad_file.write(apex_command)
+                batch_file.write(apex_command)
+                
+                peptide_output_dir = os.path.join(plgs_final_output_folder, "1_1")
+                os.makedirs(peptide_output_dir, exist_ok=True)
+                create_output_dir_command = f'mkdir "{peptide_output_dir}"\n'
+                peptide_command = f'"C:\\PLGS3.0.3\\lib\\apex3d\\Peptide3D.exe" -inputXMLFileName "{os.path.join(apex3d_output_folder, bin_file_name)}" -outputDirName "{peptide_output_dir}" -outputUserDirName "{peptide_output_dir}"\n'
+                
+                notepad_file.write(create_output_dir_command)
+                batch_file.write(create_output_dir_command)
+                notepad_file.write(peptide_command)
+                batch_file.write(peptide_command)
+                
+            else:
+                for trendline_range in trendline_ranges:
+                    apex_command = f'"C:\\PLGS3.0.3\\lib\\apex3d\\Apex3d64.exe" -pRawDirName "{raw_folder}" -outputDirName "{apex3d_output_folder}" -outputUserDirName "{apex3d_output_folder}"'
+                    if lockmass_z1_value:
+                        apex_command += f' -lockMassZ1 {lockmass_z1_value}'
+                    if lockmass_z2_value:
+                        apex_command += f' -lockMassZ2 {lockmass_z2_value}'
+                    apex_command += f' -lockMassToleranceAMU 0.3'
+                    if le_threshold_counts != 0:
+                        apex_command += f' -leThresholdCounts {le_threshold_counts}'
+                    if he_threshold_counts != 0:
+                        apex_command += f' -heThresholdCounts {he_threshold_counts}'
+                    if starting_rt_min != 0:
+                        apex_command += f' -startingRTMin {starting_rt_min}'
+                    if ending_rt_min != 0:
+                        apex_command += f' -endingRTMin {ending_rt_min}'
+                    apex_command += f' -driftFWHMStart {trendline_range.split("-")[0]} -driftFWHMEnd {trendline_range.split("-")[1]}'
+                    apex_command += ' -PLGS\n'
+                    notepad_file.write(apex_command)
+                    batch_file.write(apex_command)
+                    
+                    peptide_output_dir = os.path.join(plgs_final_output_folder, trendline_range.replace('-', '_'))
+                    create_output_dir_command = f'mkdir "{peptide_output_dir}"\n'
+                    peptide_command = f'"C:\\PLGS3.0.3\\lib\\apex3d\\Peptide3D.exe" -inputXMLFileName "{os.path.join(apex3d_output_folder, bin_file_name)}" -outputDirName "{peptide_output_dir}" -outputUserDirName "{peptide_output_dir}"\n'
+                    
+                    notepad_file.write(create_output_dir_command)
+                    batch_file.write(create_output_dir_command)
+                    notepad_file.write(peptide_command)
+                    batch_file.write(peptide_command)
+
+    print(f"Notepad file generated successfully at {notepad_file_path}")
+    print(f"Batch file generated successfully at {batch_file_path}")
+
+    return batch_file_path
+
+def find_raw_folders(input_folder):
+    raw_folders = []
+    for root, dirs, files in os.walk(input_folder):
+        for dir in dirs:
+            if dir.endswith(".raw"):
+                raw_folders.append(os.path.join(root, dir))
+    return raw_folders
+
+def browse_directory(entry_widget):
+    directory = filedialog.askdirectory()
+    if directory:
+        entry_widget.delete(0, tk.END)
+        entry_widget.insert(0, directory)
+
+def browse_file(entry_widget):
+    file = filedialog.askopenfilename(filetypes=[("All files", "*.*")])
+    if file:
+        entry_widget.delete(0, tk.END)
+        entry_widget.insert(0, file)
+
+def run_batch_file(batch_file_path):
+    try:
+        # Run the batch file in a visible command prompt and wait for it to finish
+        process = subprocess.Popen(['cmd', '/c', batch_file_path], creationflags=subprocess.CREATE_NEW_CONSOLE)
+        process.communicate()
+
+        if process.returncode != 0:
+            print(f"Error executing batch file: {batch_file_path}\nReturn code: {process.returncode}")
+            messagebox.showerror("Error", f"An error occurred while executing the batch file: {batch_file_path}\nReturn code: {process.returncode}")
+        else:
+            print(f"Batch file executed successfully: {batch_file_path}")
+
+    except Exception as e:
+        print(f"Failed to run the batch file: {batch_file_path}\nError: {e}")
+        messagebox.showerror("Error", f"Failed to run the batch file: {batch_file_path}\nError: {e}")
+
+def start_process():
+    input_folder = input_folder_entry.get().strip()
+    single_pass_folder = single_pass_entry.get().strip()
+    para_xml_dir = para_xml_entry.get()
+    fasta_file_path = fasta_entry.get()
+    output_dir = output_dir_entry.get()
+
+#Error messages so people input things correctly
+    
+    if not input_folder and not single_pass_folder:
+        messagebox.showerror("Error", "Please select at least one input folder (Multi-Pass or Single-Pass)")
+        return
+
+    if not para_xml_dir.endswith('.xml'):
+        messagebox.showerror("Error", "Please specify a valid parameter XML file.")
+        return
+
+    apex3d_output_folder = os.path.join(os.path.dirname(input_folder), "Apex3D_output")
+    plgs_final_output_folder = os.path.join(os.path.dirname(input_folder), "Peptide3D_output")
+    le_threshold_counts = int(le_threshold_entry.get())
+    he_threshold_counts = int(he_threshold_entry.get())
+    starting_rt_min = float(starting_rt_entry.get())
+    ending_rt_min = float(ending_rt_entry.get())
+    trendline_ranges = trendline_ranges_entry.get().split(",")
+    modify_resolution = resolution_checkbox_var.get()
+    
+    lockmass_z1_value = lockmass_z1_entry.get().strip()
+    lockmass_z2_value = lockmass_z2_entry.get().strip()
+
+    batch_file_paths = []
+    if input_folder:
+        batch_file_path = generate_files(input_folder, apex3d_output_folder, plgs_final_output_folder, le_threshold_counts, he_threshold_counts, starting_rt_min, ending_rt_min, trendline_ranges, modify_resolution, lockmass_z1_value, lockmass_z2_value, is_single_pass=False)
+        batch_file_paths.append(batch_file_path)
+    
+    if single_pass_folder:
+        batch_file_path = generate_files(single_pass_folder, apex3d_output_folder, plgs_final_output_folder, le_threshold_counts, he_threshold_counts, starting_rt_min, ending_rt_min, trendline_ranges, modify_resolution, lockmass_z1_value, lockmass_z2_value, is_single_pass=True)
+        batch_file_paths.append(batch_file_path)
+    
+    for batch_file_path in batch_file_paths:
+        run_batch_file(batch_file_path)
+    
+    generate_final_files(plgs_final_output_folder, para_xml_dir, fasta_file_path, output_dir)
+
+def generate_final_files(bin_dir, para_xml_dir, fasta_file_path, output_dir):
+    fasta_filename = os.path.basename(fasta_file_path)
+
+#More error messages
+
+    if not os.path.isdir(bin_dir) or not os.path.isfile(fasta_file_path):
+        messagebox.showerror("Error", "Invalid directory or file selected for bin or FASTA.")
+        return
+
+    para_xml_file_path = para_xml_dir
+    batch_file_contents = []
+    
+    # Save final batch file in the batch files directory (same directory as the others)
+    batch_file_folder = os.path.join(os.path.dirname(bin_dir), "batch_files")
+    if not os.path.exists(batch_file_folder):
+        os.makedirs(batch_file_folder)
+
+    batch_file_path = os.path.join(batch_file_folder, "combined_final_processing.bat")
+    notepad_file_path = os.path.join(batch_file_folder, "final_processing_contents.txt")
+
+    for subdir, _, files in os.walk(bin_dir):
+        for file in files:
+            if file.endswith('.bin'):
+                bin_file_path = os.path.join(subdir, file)
+                relative_path = os.path.relpath(subdir, bin_dir)
+                output_subdir = os.path.join(output_dir, relative_path)
+                
+                if not os.path.exists(output_subdir):
+                    os.makedirs(output_subdir)
+
+                command = (
+                    f'SET "paraXMLFileName={para_xml_file_path}"\n'
+                    f'SET "pep3DFileName={bin_file_path}"\n'
+                    f'SET "proteinFASTAFileName={fasta_file_path}"\n'
+                    f'SET "outPutDirName={output_subdir}"\n'
+                    f'SET "outputUserDirName={output_subdir}"\n\n'
+                    f'\"C:\\PLGS3.0.3\\bin\\iaDBs.exe\" '
+                    f'-paraXMLFileName "%paraXMLFileName%" '
+                    f'-pep3DFileName "%pep3DFileName%" '
+                    f'-proteinFASTAFileName "%proteinFASTAFileName%" '
+                    f'-outPutDirName "%outPutDirName%" '
+                    f'-outputUserDirName "%outputUserDirName%"\n\n'
+                )
+                batch_file_contents.append(command)
+
+    if batch_file_contents:
+        with open(batch_file_path, 'w', encoding='latin-1') as batch_file:
+            batch_file.writelines(batch_file_contents)
+        
+        with open(notepad_file_path, 'w', encoding='latin-1') as notepad_file:
+            notepad_file.writelines(batch_file_contents)
+        
+        print(f"Final processing batch file created at: {batch_file_path}")
+        run_batch_file(batch_file_path)  # Automatically run the final batch file
+    else:
+        messagebox.showwarning("Warning", "No .bin files found in the selected directory.")
+
+# GUI Setup
+root = tk.Tk()
+root.title("Data processing")
+
+# Resolution Checkbox
+resolution_checkbox_var = tk.BooleanVar()
+resolution_checkbox = tk.Checkbutton(root, text="Change resolution in _extern to 40000", variable=resolution_checkbox_var)
+resolution_checkbox.grid(row=0, column=0, columnspan=3, pady=5)
+
+# Multi-Pass folder entry
+tk.Label(root, text="Multi-Pass folder containing raw files:").grid(row=1, column=0, padx=5, pady=5, sticky="e")
+input_folder_entry = tk.Entry(root, width=50)
+input_folder_entry.grid(row=1, column=1, padx=5, pady=5)
+input_folder_entry.insert(0, "/path/to/multi-pass/folder")
+tk.Button(root, text="Browse", command=lambda: browse_directory(input_folder_entry)).grid(row=1, column=2, padx=5, pady=5)
+
+# Single-Pass folder entry
+tk.Label(root, text="Single-Pass folder containing raw files:").grid(row=2, column=0, padx=5, pady=5, sticky="e")
+single_pass_entry = tk.Entry(root, width=50)
+single_pass_entry.grid(row=2, column=1, padx=5, pady=5)
+single_pass_entry.insert(0, "/path/to/single-pass/folder")
+tk.Button(root, text="Browse", command=lambda: browse_directory(single_pass_entry)).grid(row=2, column=2, padx=5, pady=5)
+
+# energy thresholds
+tk.Label(root, text="Low energy threshold:").grid(row=3, column=0, padx=5, pady=5, sticky="e")
+le_threshold_entry = tk.Entry(root, width=10)
+le_threshold_entry.grid(row=3, column=1, padx=5, pady=5)
+le_threshold_entry.insert(0, "250")
+tk.Label(root, text="High energy threshold:").grid(row=4, column=0, padx=5, pady=5, sticky="e")
+he_threshold_entry = tk.Entry(root, width=10)
+he_threshold_entry.grid(row=4, column=1, padx=5, pady=5)
+he_threshold_entry.insert(0, "100")
+
+# Retention time thresholds
+tk.Label(root, text="Retention time start:").grid(row=5, column=0, padx=5, pady=5, sticky="e")
+starting_rt_entry = tk.Entry(root, width=10)
+starting_rt_entry.grid(row=5, column=1, padx=5, pady=5)
+starting_rt_entry.insert(0, "1.0")
+tk.Label(root, text="Retention time end:").grid(row=6, column=0, padx=5, pady=5, sticky="e")
+ending_rt_entry = tk.Entry(root, width=10)
+ending_rt_entry.grid(row=6, column=1, padx=5, pady=5)
+ending_rt_entry.insert(0, "12")
+
+# Trendline Ranges
+tk.Label(root, text="Multi-pass processing trendlines:").grid(row=7, column=0, padx=5, pady=5, sticky="e")
+trendline_ranges_entry = tk.Entry(root, width=50)
+trendline_ranges_entry.grid(row=7, column=1, padx=5, pady=5)
+trendline_ranges_entry.insert(0, "3-6,6-9,9-12,12-15,15-18,18-21")
+
+# Lockmass values
+tk.Label(root, text="Lockmass charge 1:").grid(row=8, column=0, padx=5, pady=5, sticky="e")
+lockmass_z1_entry = tk.Entry(root, width=10)
+lockmass_z1_entry.grid(row=8, column=1, padx=5, pady=5)
+lockmass_z1_entry.insert(0, "556.2771")
+tk.Label(root, text="Lockmass charge 2:").grid(row=9, column=0, padx=5, pady=5, sticky="e")
+lockmass_z2_entry = tk.Entry(root, width=10)
+lockmass_z2_entry.grid(row=9, column=1, padx=5, pady=5)
+lockmass_z2_entry.insert(0, "")
+
+# Parameter XML file 
+tk.Label(root, text="Workflow Parameters XML file:").grid(row=10, column=0, padx=5, pady=5, sticky="e")
+para_xml_entry = tk.Entry(root, width=50)
+para_xml_entry.grid(row=10, column=1, padx=5, pady=5)
+para_xml_entry.insert(0, "/path/to/parameters.xml")
+tk.Button(root, text="Browse", command=lambda: browse_file(para_xml_entry)).grid(row=10, column=2, padx=5, pady=5)
+
+# FASTA file entry
+tk.Label(root, text="FASTA File:").grid(row=11, column=0, padx=5, pady=5, sticky="e")
+fasta_entry = tk.Entry(root, width=50)
+fasta_entry.grid(row=11, column=1, padx=5, pady=5)
+fasta_entry.insert(0, "/path/to/fasta/file.fasta")
+tk.Button(root, text="Browse", command=lambda: browse_file(fasta_entry)).grid(row=11, column=2, padx=5, pady=5)
+
+# Output directory entry
+tk.Label(root, text="Output folder for processed data:").grid(row=12, column=0, padx=5, pady=5, sticky="e")
+output_dir_entry = tk.Entry(root, width=50)
+output_dir_entry.grid(row=12, column=1, padx=5, pady=5)
+output_dir_entry.insert(0, "/path/to/output/directory")
+tk.Button(root, text="Browse", command=lambda: browse_directory(output_dir_entry)).grid(row=12, column=2, padx=5, pady=5)
+
+# Process start button
+tk.Button(root, text="Start Processing", command=start_process).grid(row=13, column=0, columnspan=3, pady=20)
+
+# Run the main loop
+root.mainloop()
