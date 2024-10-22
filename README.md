@@ -3,11 +3,11 @@ Process, filter and merge cyclic ion mobility mass spectrometry one- and multi-p
 
 __*Want to download and learn how to use MultiPassMerger?*__
 
---> Please see the quick start tutorial on our website: 
+--> Please see the quick start tutorial on our website: https://politislab.uk/software/
 
 __*Want to know more about MultiPassMerger code logic?*__
 
---> Please see the detailed description on our website:
+--> Please see the detailed description on our website: https://politislab.uk/software/
 
 
 __*Dependancies:*__
