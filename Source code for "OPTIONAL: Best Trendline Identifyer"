@@ -18,7 +18,7 @@ class TrendlineAnalyzerApp:
         self.separation_time_set = False  # Flag to check if selection is made
         self.check_vars = {}  # Store checkbox variables for separation times
 
-        # Create GUI elements
+        # Create GUI widgets
         self.create_widgets()
 
     def create_widgets(self):
@@ -57,7 +57,6 @@ class TrendlineAnalyzerApp:
         self.scrollbar.grid(row=2, column=2, sticky='ns')
         self.output_text['yscrollcommand'] = self.scrollbar.set
 
-        # Filtering Parameters Section on the right side again
 
         # Separation time selection label
         self.separation_time_label = tk.Label(
@@ -275,13 +274,13 @@ class TrendlineAnalyzerApp:
             self.exclude_proteins_label.config(fg='black')
 
     def open_protein_selection_window(self):
-        # Read 'protein.Entry' values in IA_final_peptide.csv files
+        # Read protein.Entry values in IA_final_peptide.csv files
 
-        # Get subfolders
+        # Get sub folders
         subfolders = [os.path.join(self.input_folder, o) for o in os.listdir(self.input_folder)
                       if os.path.isdir(os.path.join(self.input_folder, o))]
 
-        # If no subfolders found, include the input folder
+        # If no subfolders found, inc. input folder
         if not subfolders:
             subfolders = [self.input_folder]
 
@@ -356,7 +355,7 @@ class TrendlineAnalyzerApp:
         else:
             self.exclude_proteins_label.config(fg='black')
 
-        # Close the window
+        # Close window
         self.protein_window.destroy()
 
     def process_trendlines(self):
