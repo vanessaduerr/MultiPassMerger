@@ -1,0 +1,97 @@
+import os
+import sys
+import tkinter as tk
+from tkinter import messagebox
+import subprocess
+import webbrowser
+
+# Direct absolute paths to each script
+step1_script = r"Z:\Data\Vanessa\Code_python\March_2025\Multi_pass_merger_6\sub_processes\Processing_data_version_3_3_27FEB2025.py"
+step2_script = r"Z:\Data\Vanessa\Code_python\March_2025\Multi_pass_merger_6\sub_processes\Merger_5_4_2_28FEB2025.py"
+best_trendline_script = r"Z:\Data\Vanessa\Code_python\March_2025\Multi_pass_merger_6\sub_processes\best trendline_ID_VERY_CLOSE_14_INC-PROTEIN_SELECTION_inc_choose_seperation_time_14OCT24.py"
+linear_regression_script = r"Z:\Data\Vanessa\Code_python\March_2025\Multi_pass_merger_6\sub_processes\version3_4_1_Linear_regression_multipass_data_trendline_prediction_05MARCH25.py"
+
+def run_python_script(script_path):
+    if not os.path.isfile(script_path):
+        messagebox.showerror("Error", f"Python script not found:\n{script_path}")
+        return
+    try:
+        subprocess.run([sys.executable, script_path], check=True)
+    except subprocess.CalledProcessError as e:
+        messagebox.showerror("Error", f"Subprocess error occurred:\n{e}")
+    except Exception as e:
+        messagebox.showerror("Error", f"An error occurred:\n{e}")
+
+def open_step1_gui():
+    run_python_script(step1_script)
+
+def open_step2_gui():
+    run_python_script(step2_script)
+
+def open_best_trendline_gui():
+    run_python_script(best_trendline_script)
+
+def open_linear_regression_gui():
+    run_python_script(linear_regression_script)
+
+def open_help():
+    webbrowser.open('https://politislab.uk/multipassmerger/3/')
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    root.title("Main Multi-Pass Merger Interface")
+    root.configure(bg='#FFB300')
+    root.geometry("450x300")
+
+    button_font = ('Arial', 13, 'bold')
+    optional_button_font = ('Arial', 10, 'bold')
+    button_relief = 'raised'
+
+    step1_button = tk.Button(
+        root,
+        text="Step 1: Process Data",
+        command=open_step1_gui,
+        font=button_font,
+        relief=button_relief,
+        bg='white'
+    )
+    step1_button.pack(pady=(20, 10))
+
+    step2_button = tk.Button(
+        root,
+        text="Step 2: Merge and Filter Data",
+        command=open_step2_gui,
+        font=button_font,
+        relief=button_relief,
+        bg='white'
+    )
+    step2_button.pack(pady=10)
+
+    regression_button = tk.Button(
+        root,
+        text="Trendline Visualization",
+        command=open_linear_regression_gui,
+        font=optional_button_font,
+        relief=button_relief
+    )
+    regression_button.pack(pady=10)
+
+    info_button = tk.Button(
+        root,
+        text="Best Trendline ID",
+        command=open_best_trendline_gui,
+        font=optional_button_font,
+        relief=button_relief
+    )
+    info_button.pack(pady=(10, 10))
+
+    help_button = tk.Button(
+        root,
+        text="Help",
+        command=open_help,
+        font=button_font,
+        relief=button_relief
+    )
+    help_button.pack(pady=10)
+
+    root.mainloop()
