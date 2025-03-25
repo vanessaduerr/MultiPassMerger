@@ -1,3 +1,4 @@
+# -*- coding: latin-1 -*-
 import os
 import re
 import shutil
@@ -7,12 +8,17 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 from datetime import datetime
 
-# Remove extra underscores from file names  
+
 def clean_underscores(file_name):
+    """Remove extra underscores from file names to ensure renaming is done correctly."""
     return re.sub(r'_{2,}', '_', file_name)
 
-# Extract separation time from file name
 def extract_separation_time(file_name):
+    """
+    Extract separation time from the file name:
+    Looks for '<number>ms' or '<number>s'.
+    Returns the number as a string or None if not found.
+    """
     ms_match = re.search(r'(\d+)ms', file_name)
     s_match = re.search(r'(\d+)s', file_name)
     if ms_match:
@@ -20,54 +26,319 @@ def extract_separation_time(file_name):
     elif s_match:
         return s_match.group(1)
     else:
-        return None  # Return None if no separation time is found
+        return None  # If no separation time found
 
-# Extract trendline from folder hierarchy
 def extract_trendline(old_path):
-    # Start from the folder containing the file and move up
+    """
+    Extract the trendline folder name (e.g. '3_9') from the directory hierarchy.
+    We assume the pattern is digits + underscore + digits in some parent folder.
+    If not found, returns 'NoTrendline'.
+    """
     current_folder = os.path.dirname(old_path)
     while True:
-        # Get the base name of the current folder
         folder_name = os.path.basename(current_folder)
-        # Check if the folder name consists of two numbers separated by an underscore
         if re.match(r'^\d+_\d+$', folder_name):
             return folder_name
-        # Move up one directory
         parent_folder = os.path.dirname(current_folder)
         if parent_folder == current_folder:
-            # Reached root directory
             break
         current_folder = parent_folder
-    # If no matching folder is found, return 'NoTrendline'
     return 'NoTrendline'
 
-# Rename files based on separation time and trendline
-def rename_csv_files(folder_path, temp_folder):
-    generated_files = []
+def get_all_sample_names(folder_path):
+    """
+    Recursively collects the base file names (without extension) for all
+    CSV files named '*IA_final_peptide.csv' and returns a sorted list of unique names.
+    """
+    all_samples = set()
     for root, dirs, files in os.walk(folder_path):
         for file in files:
             if file.endswith("IA_final_peptide.csv"):
-                old_path = os.path.join(root, file)
+                base_name = os.path.splitext(file)[0]
+                all_samples.add(base_name)
+    return sorted(all_samples)
 
-                # Extract trendline from folder hierarchy
-                trendline = extract_trendline(old_path)
+def rename_csv_files(folder_path, temp_folder, selected_samples, sample_groups):
+    """
+    Rename and copy only those files whose base names are in 'selected_samples'.
+    'sample_groups' is a dictionary mapping sample name -> user override (the user-chosen group name).
 
-                # Extract separation time from file name
+    Returns a dictionary mapping:
+       new_csv_path -> original_sample_name
+    so we can later set 'origin_file' to match the exact original sample name.
+    """
+    renamed_dict = {}
+    for root, dirs, files in os.walk(folder_path):
+        for file in files:
+            if file.endswith("IA_final_peptide.csv"):
                 file_name_without_ext = os.path.splitext(file)[0]
-                separation_time = extract_separation_time(file_name_without_ext)
-
+                if file_name_without_ext not in selected_samples:
+                    continue
+                old_path = os.path.join(root, file)
+                trendline = extract_trendline(old_path)
+                separation_time = sample_groups.get(file_name_without_ext, "0")
                 if not separation_time:
-                    separation_time = '0'  # Use '0' if no separation time is found to ensure it still works
-
-                # Create new file name
-                rest_of_filename = file_name_without_ext
-                new_file_name = f"{separation_time}_{trendline}_{rest_of_filename}.csv"
+                    separation_time = "0"
+                # Build new file name
+                new_file_name = f"{separation_time}_{trendline}_{file_name_without_ext}.csv"
                 new_file_name = clean_underscores(new_file_name)
                 new_path = os.path.join(temp_folder, new_file_name)
                 shutil.copy2(old_path, new_path)
-                generated_files.append(new_path)
-    return generated_files
+                # Store the mapping:new_path to original sample name
+                renamed_dict[new_path] = file_name_without_ext
+    return renamed_dict
 
+
+# supicious peptides review logic
+def calculate_theoretical_mass(peptide_seq, aa_masses=None, water_mass=18.01056):
+    """
+    Calculate sum of amino acid masses + water mass.
+    """
+    if aa_masses is None:
+        aa_masses = {
+            'A': 71.037113805, 'R': 156.101111050, 'N': 114.042927470, 'D': 115.026943065,
+            'C': 103.009184505, 'E': 129.042593135, 'Q': 128.058577540, 'G': 57.021463735,
+            'H': 137.058911875, 'I': 113.084064015, 'L': 113.084064015, 'K': 128.094963050,
+            'M': 131.040484645, 'F': 147.068413945, 'P': 97.052763875,  'S': 87.032028435,
+            'T': 101.047678505, 'W': 186.079312980, 'Y': 163.063328575, 'V': 99.068413945
+        }
+    try:
+        base_mass = sum(aa_masses.get(aa, 0) for aa in peptide_seq)
+        return base_mass + water_mass
+    except:
+        return None
+
+# Suspicious Peptide review window
+
+class SuspiciousReviewWindow(tk.Toplevel):
+    def __init__(self, master, suspicious_df):
+        """
+        Groups are determined by rounding retT to 2 decimals and the theoretical mass to 1 decimal.
+        Each group is shown in a bold, solid-bordered LabelFrame. The top has a pinned message with
+        an emoji and instructions, so it doesn't scroll.
+        """
+        super().__init__(master)
+        self.title("Review Suspicious Peptides")
+        self.geometry("1020x540")  
+        self.result = {}
+        self.selected_vars = {}
+        self.suspicious_df = suspicious_df
+
+        
+        self.grid_rowconfigure(2)
+        self.grid_columnconfigure(0)
+
+    
+        top_message_frame = tk.Frame(self)
+        top_message_frame.grid(row=0, column=0, columnspan=2, sticky='nw', padx=5, pady=5)
+
+        emoji_label = tk.Label(
+            top_message_frame,
+            text="\U0001F928",   
+            font=('Arial', 30, 'bold'),
+            fg='black'
+        )
+        emoji_label.grid(row=0, column=0, sticky='w')
+
+        instructions_text = (
+            "Suspicious peptides: These peptides have very similar retention times "
+            "and theoretical masses. Check that they are not assigned twice. "
+            "If in doubt, choose the peptide with the most matched products (orange)."
+        )
+        instructions_label = tk.Label(
+            top_message_frame,
+            text=instructions_text,
+            font=('Arial', 10, 'bold'),
+            fg='black',
+            wraplength=880,
+            justify='left'
+        )
+        instructions_label.grid(row=0, column=1, padx=7, sticky='w')
+
+        # scrollable window 
+        canvas = tk.Canvas(self, width=1000, height=370, scrollregion=(0, 0, 2000, 2000))
+        v_scrollbar = tk.Scrollbar(self, orient="vertical", command=canvas.yview)
+        h_scrollbar = tk.Scrollbar(self, orient="horizontal", command=canvas.xview)
+
+        self.main_frame = tk.Frame(canvas)
+        self.main_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=self.main_frame, anchor="nw")
+
+        canvas.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
+        canvas.grid(row=1, column=0, sticky="nsew")
+        v_scrollbar.grid(row=1, column=1, sticky="ns")
+        h_scrollbar.grid(row=2, column=0, columnspan=2, sticky="ew")
+
+        #  theoretical mass 
+        if 'peptide.seq' in self.suspicious_df.columns:
+            self.suspicious_df['theo_mass'] = self.suspicious_df['peptide.seq'].apply(
+                lambda seq: calculate_theoretical_mass(str(seq))
+            )
+        else:
+            self.suspicious_df['theo_mass'] = None
+
+        # Group by rounded retT, rounded theoretical mass
+        groups = {}
+        for idx, row in self.suspicious_df.iterrows():
+            retT_rounded = round(row.get('precursor.retT', 0), 2)
+            theo = row.get('theo_mass', None)
+            theo_rounded = round(theo, 1) if theo is not None else None
+            groups.setdefault((retT_rounded, theo_rounded), []).append((idx, row))
+
+        current_row = 0
+        for (ret_val, theo_val), items in groups.items():
+            if len(items) < 2:
+                continue
+
+            # find max matched products 
+            max_matched = max(
+                r.get('peptide.MatchedProducts', 0)
+                for _, r in items
+                if pd.notna(r.get('peptide.MatchedProducts', None))
+            )
+
+            
+            group_label = f"Group retT={ret_val}, mass={theo_val}"
+            lf = tk.LabelFrame(
+                self.main_frame,
+                text=group_label,
+                bd=2,
+                relief=tk.SOLID,
+                padx=4,
+                pady=4,
+                font=('Arial', 8, 'bold')
+            )
+            lf.grid(row=current_row, column=0, padx=4, pady=4, sticky="ew")
+            current_row += 1
+
+            
+            tk.Label(lf, text="Keep", width=10, font=('Arial', 10, 'bold'), anchor='center')\
+                .grid(row=0, column=0, rowspan=2, sticky='nsew')
+
+            tk.Label(lf, text="Sequence", width=30, font=('Arial', 10, 'bold'), anchor='w')\
+                .grid(row=0, column=1, sticky='nsew')
+            tk.Label(lf, text="(peptide.seq)", width=30, font=('Arial', 8), anchor='w')\
+                .grid(row=1, column=1, sticky='nsew')
+
+            tk.Label(lf, text="Retention time", width=17, font=('Arial', 10, 'bold'), anchor='w')\
+                .grid(row=0, column=2, sticky='nsew')
+            tk.Label(lf, text="(precursor.retT)", width=17, font=('Arial', 8), anchor='w')\
+                .grid(row=1, column=2, sticky='nsew')
+
+            tk.Label(lf, text="Theoretical mass", width=17, font=('Arial', 10, 'bold'), anchor='w')\
+                .grid(row=0, column=3, sticky='nsew')
+            tk.Label(lf, text="(SUM aa+18.01056)", width=17, font=('Arial', 8), anchor='w')\
+                .grid(row=1, column=3, sticky='nsew')
+
+            tk.Label(lf, text="Experimental mass", width=17, font=('Arial', 10, 'bold'), anchor='w')\
+                .grid(row=0, column=4, sticky='nsew')
+            tk.Label(lf, text="((mz*z)-(1.00784*z))", width=17, font=('Arial', 8), anchor='w')\
+                .grid(row=1, column=4, sticky='nsew')
+
+            tk.Label(lf, text="Mass error", width=10, font=('Arial', 10, 'bold'), anchor='w')\
+                .grid(row=0, column=5, sticky='nsew')
+            tk.Label(lf, text="(ppm)", width=10, font=('Arial', 8), anchor='w')\
+                .grid(row=1, column=5, sticky='nsew')
+
+            tk.Label(lf, text="No. of matched products", width=20, font=('Arial', 10, 'bold'), anchor='w')\
+                .grid(row=0, column=6, sticky='nsew')
+            tk.Label(lf, text="(peptide.MatchedProducts)", width=20, font=('Arial', 8), anchor='w')\
+                .grid(row=1, column=6, sticky='nsew')
+
+            tk.Label(lf, text="Matched products", width=20, font=('Arial', 10, 'bold'), anchor='w')\
+                .grid(row=0, column=7, sticky='nsew')
+            tk.Label(lf, text="(peptide.MatchedProductsString)", width=20, font=('Arial', 8), anchor='w')\
+                .grid(row=1, column=7, sticky='nsew')
+
+            for col_idx in range(8):
+                lf.grid_columnconfigure(col_idx)
+
+            row_index = 2
+            for (real_idx, data_row) in items:
+                var = tk.IntVar(value=1)
+                self.selected_vars[real_idx] = var
+
+                matched_val = data_row.get('peptide.MatchedProducts', 0)
+                color = "orange" if matched_val == max_matched else "red"
+                bold_font = ('Arial', 10, 'bold')
+
+                # Column 0: Checkbox
+                cb = tk.Checkbutton(lf, variable=var)
+                cb.grid(row=row_index, column=0, sticky='nsew')
+
+                # Column 1: Sequence
+                seq_val = data_row.get('peptide.seq', '')
+                seq_label = tk.Label(lf, text=str(seq_val), fg=color, font=bold_font, anchor='w')
+                seq_label.grid(row=row_index, column=1, sticky='nsew')
+
+                # Column 2: Retention time
+                ret_val = data_row.get('precursor.retT', '')
+                ret_label = tk.Label(lf, text=str(ret_val), fg=color, font=bold_font, anchor='w')
+                ret_label.grid(row=row_index, column=2, sticky='nsew')
+
+                # Column 3: Theoretical mass
+                theo_mass_str = ""
+                if 'theo_mass' in data_row and data_row['theo_mass'] is not None:
+                    theo_mass_str = f"{data_row['theo_mass']:.5f}"
+                theo_label = tk.Label(lf, text=theo_mass_str, fg=color, font=bold_font, anchor='w')
+                theo_label.grid(row=row_index, column=3, sticky='nsew')
+
+                # Column 4: Experimental mass = (mz*z) - (1.00784*z)
+                exp_mass_str = ""
+                try:
+                    mz_val = float(data_row['precursor.mz'])
+                    z_val = float(data_row['precursor.z'])
+                    exp_mass = (mz_val * z_val) - (1.00784 * z_val)
+                    exp_mass_str = f"{exp_mass:.5f}"
+                except:
+                    pass
+                exp_mass_label = tk.Label(lf, text=exp_mass_str, fg=color, font=bold_font, anchor='w')
+                exp_mass_label.grid(row=row_index, column=4, sticky='nsew')
+
+                # Column 5: Mass error (ppm)
+                mass_error_str = ""
+                try:
+                    if exp_mass_str and theo_mass_str:
+                        exp_val = float(exp_mass_str)
+                        theo_val = float(theo_mass_str)
+                        if theo_val != 0:
+                            ppm = ((exp_val - theo_val) / theo_val) * 1e6
+                            mass_error_str = f"{ppm:.1f}"
+                except:
+                    pass
+                mass_label = tk.Label(lf, text=mass_error_str, fg=color, font=bold_font, anchor='w')
+                mass_label.grid(row=row_index, column=5, sticky='nsew')
+
+                # Column 6: No. of matched products
+                mp_label = tk.Label(lf, text=str(matched_val), fg=color, font=bold_font, anchor='w')
+                mp_label.grid(row=row_index, column=6, sticky='nsew')
+
+                # Column 7: Matched products string
+                matched_str = data_row.get('peptide.MatchedProductsString', '')
+                matched_str_label = tk.Label(lf, text=str(matched_str), fg=color, font=bold_font, anchor='w')
+                matched_str_label.grid(row=row_index, column=7, sticky='nsew')
+
+                row_index += 1
+
+        if current_row == 0:
+            tk.Label(
+                self.main_frame,
+                text="No suspicious peptides found!",
+                font=('Arial', 12)
+            ).grid(row=0, column=0, padx=10, pady=10)
+
+        apply_button = tk.Button(self, text="Apply Selection", command=self.apply_selection)
+        apply_button.grid(row=3, column=0, columnspan=2, pady=10)
+
+    def apply_selection(self):
+        accepted_indices = []
+        for row_idx, var in self.selected_vars.items():
+            if var.get() == 1:
+                accepted_indices.append(row_idx)
+        self.result = accepted_indices
+        self.destroy()
+
+#merging/filtering
 class TrendlineAnalyzerApp:
     def __init__(self, master):
         self.master = master
@@ -75,21 +346,27 @@ class TrendlineAnalyzerApp:
 
         self.input_folder = ''
         self.results = ''
-        self.proteins_to_exclude = []    # List of proteins to exclude
-        self.proteins_to_exclude_set = False  # Flag to check if selection is made
 
-        # Create the GUI elements
+        self.selected_samples = []
+        self.sample_group_overrides = {}
+        # Dictionary for user-chosen MP/SP for each sample
+        self.sample_type_overrides = {}
+        self.proteins_to_exclude = []
+        self.proteins_to_exclude_set = False
+
+        
+        self.renamed_dict = {}
+
         self.create_widgets()
 
     def create_widgets(self):
-        # Define a 2-column layout
         left_frame = tk.Frame(self.master)
         left_frame.grid(row=0, column=0, padx=10, pady=10, sticky='nw')
 
         right_frame = tk.Frame(self.master)
         right_frame.grid(row=0, column=1, padx=10, pady=10, sticky='ne')
 
-        # Input Folder Section
+        # Input folder section
         self.input_label = tk.Label(left_frame, text="Select Input Folder:")
         self.input_label.grid(row=0, column=0, padx=5, pady=5, sticky='e')
 
@@ -99,18 +376,15 @@ class TrendlineAnalyzerApp:
         self.browse_button = tk.Button(left_frame, text="Browse", command=self.browse_folder)
         self.browse_button.grid(row=0, column=2, padx=0, pady=5, sticky='w')
 
-        # Output text area
+        # Output text 
         self.output_text = tk.Text(left_frame, width=80, height=25)
         self.output_text.grid(row=1, column=0, columnspan=2, padx=10, pady=10)
 
-        # Add a scrollbar 
         self.scrollbar = tk.Scrollbar(left_frame, command=self.output_text.yview, width=12)
         self.scrollbar.grid(row=1, column=2, sticky='ns')
         self.output_text['yscrollcommand'] = self.scrollbar.set
 
-        # Filtering Parameters Section on the right side
-
-        # Exclude Proteins Checkbox and Label
+        # Filtering Parameters Section (Right Frame)
         self.exclude_proteins_frame = tk.Frame(right_frame)
         self.exclude_proteins_frame.grid(row=0, column=0, columnspan=2, padx=10, pady=5, sticky='w')
 
@@ -123,24 +397,26 @@ class TrendlineAnalyzerApp:
         )
         self.exclude_proteins_checkbox.pack(side='left')
 
-        self.exclude_proteins_label = tk.Label(
-            self.exclude_proteins_frame,
-            text="Exclude proteins..."
-        )
+        self.exclude_proteins_label = tk.Label(self.exclude_proteins_frame, text="Exclude proteins...")
         self.exclude_proteins_label.pack(side='left')
 
         self.create_filtering_fields(right_frame)
 
-        # Process Button at the bottom of the right side
-        self.process_button = tk.Button(
-            right_frame,
-            text="Process Files",
-            command=self.process_files
-        )
+        
+        output_format_frame = tk.Frame(right_frame)
+        output_format_frame.grid(row=13, column=0, columnspan=2, padx=10, pady=5, sticky='w')
+
+        tk.Label(output_format_frame, text="Output file format:").pack(side='left', padx=5)
+        self.output_format_var = tk.StringVar(value="DynamX")
+        tk.Radiobutton(output_format_frame, text="DynamX", variable=self.output_format_var, value="DynamX")\
+            .pack(side='left', padx=5)
+        tk.Radiobutton(output_format_frame, text="HDXExaminer", variable=self.output_format_var, value="HDXExaminer")\
+            .pack(side='left', padx=5)
+
+        self.process_button = tk.Button(right_frame, text="Process Files", command=self.process_files)
         self.process_button.grid(row=15, column=1, padx=10, pady=20)
 
     def create_filtering_fields(self, parent):
-        # Filtering parameters
         self.label_and_entry(parent, "Sample replicate threshold:", "3", 1, 0)
         self.sample_replicate_threshold_entry = self.entry
 
@@ -188,21 +464,19 @@ class TrendlineAnalyzerApp:
         value_str = value_str.strip()
         if value_str == '' or value_str == '0':
             return None
-        else:
-            try:
-                return int(value_str)
-            except ValueError:
-                return None
+        try:
+            return int(value_str)
+        except ValueError:
+            return None
 
     def get_float_value(self, value_str):
         value_str = value_str.strip()
         if value_str == '' or value_str == '0':
             return None
-        else:
-            try:
-                return float(value_str)
-            except ValueError:
-                return None
+        try:
+            return float(value_str)
+        except ValueError:
+            return None
 
     def browse_folder(self):
         folder_selected = filedialog.askdirectory()
@@ -210,25 +484,127 @@ class TrendlineAnalyzerApp:
             self.input_folder = folder_selected
             self.input_entry.delete(0, tk.END)
             self.input_entry.insert(0, self.input_folder)
-            # Enable the exclude proteins checkbox
             self.exclude_proteins_checkbox.config(state=tk.NORMAL)
+            self.open_sample_selection_window()
+
+    def open_sample_selection_window(self):
+        sample_names = get_all_sample_names(self.input_folder)
+        if not sample_names:
+            messagebox.showinfo("Info", "No valid samples found in this folder.")
+            return
+        self.sample_window = tk.Toplevel(self.master)
+        self.sample_window.title("Select Samples to Merge")
+        self.sample_window.geometry("750x400")
+        self.sample_window.grid_rowconfigure(2, weight=1)
+        self.sample_window.grid_columnconfigure(0, weight=1)
+
+        top_label = tk.Label(
+            self.sample_window,
+            text="Tick samples to include. Match replicates (number)"
+        )
+        top_label.grid(row=0, column=0, padx=5, pady=5, sticky='w')
+
+        self.deselect_all_var = tk.IntVar(value=0)
+        self.deselect_all_chk = tk.Checkbutton(
+            self.sample_window,
+            text="De-select all sample-groups",
+            variable=self.deselect_all_var,
+            command=self.on_deselect_all_clicked
+        )
+        self.deselect_all_chk.grid(row=0, column=1, padx=5, sticky='w')
+
+        scroll_frame = tk.Frame(self.sample_window)
+        scroll_frame.grid(row=2, column=0, columnspan=2, sticky='nsew', padx=5, pady=5)
+
+        canvas = tk.Canvas(scroll_frame, width=680, height=300)
+        scrollbar = tk.Scrollbar(scroll_frame, orient="vertical", command=canvas.yview)
+        self.sample_frame = tk.Frame(canvas)
+        self.sample_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=self.sample_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        self.sample_vars = {}
+        self.sample_group_entries = {}
+
+        for samp in sample_names:
+            default_time = extract_separation_time(samp) or "0"
+            # Decide MP/SP based on presence of <number>ms in sample name
+            detected_type = "MP" if re.search(r'\d+ms', samp) else "SP"
+
+            frame_row = tk.Frame(self.sample_frame)
+            frame_row.pack(anchor='w', fill='x', pady=2)
+
+            var = tk.IntVar(value=1)
+            chk = tk.Checkbutton(frame_row, text=samp, variable=var, width=70, anchor='w')
+            chk.pack(side='left')
+
+            entry = tk.Entry(frame_row, width=10)
+            entry.insert(0, default_time)
+            entry.pack(side='left', padx=10)
+
+            # Extra column for MP/SP
+            type_entry = tk.Entry(frame_row, width=10, justify='center')
+            type_entry.insert(0, detected_type)
+            type_entry.pack(side='left', padx=10)
+            type_entry.bind("<KeyRelease>", lambda e, te=type_entry: self.update_sample_type_color(te))
+            self.update_sample_type_color(type_entry)
+
+            self.sample_vars[samp] = var
+            self.sample_group_entries[samp] = entry
+
+            # default MP/SP in sample_type_overrides
+            self.sample_type_overrides[samp] = type_entry.get().strip().upper()
+            
+            if not hasattr(self, 'sample_type_entries'):
+                self.sample_type_entries = {}
+            self.sample_type_entries[samp] = type_entry
+
+        ok_button = tk.Button(self.sample_window, text="OK", command=self.on_sample_selection_ok)
+        ok_button.grid(row=3, column=0, columnspan=2, sticky='e', padx=10, pady=10)
+
+    def update_sample_type_color(self, entry):
+        """Change background color for MP/SP."""
+        value = entry.get().strip().upper()
+        if value == "MP":
+            entry.config(bg="#ADD8E6")
+        elif value == "SP":
+            entry.config(bg="#D8BFD8")
+        else:
+            entry.config(bg="white")
+
+    def on_deselect_all_clicked(self):
+        if self.deselect_all_var.get() == 1:
+            for var in self.sample_vars.values():
+                var.set(0)
+        else:
+            for var in self.sample_vars.values():
+                var.set(1)
+
+    def on_sample_selection_ok(self):
+        self.selected_samples = []
+        self.sample_group_overrides = {}
+        for sample_name, var in self.sample_vars.items():
+            if var.get() == 1:
+                self.selected_samples.append(sample_name)
+                override = self.sample_group_entries[sample_name].get()
+                self.sample_group_overrides[sample_name] = override
+                
+                self.sample_type_overrides[sample_name] = self.sample_type_entries[sample_name].get().strip().upper()
+        self.sample_window.destroy()
+        self.output_text.insert(tk.END, f"Selected {len(self.selected_samples)} sample(s) for merging.\n")
 
     def exclude_proteins_checked(self):
         if self.exclude_proteins_var.get():
-            # The checkbox is checked, reset the flag and open the new window
             self.proteins_to_exclude_set = False
             self.open_protein_selection_window()
         else:
-            # The checkbox is unchecked, clear the exclude list and reset the flag
             self.proteins_to_exclude = []
             self.proteins_to_exclude_set = False
-            # Reset the label color to default
             self.exclude_proteins_label.config(fg='black')
 
     def open_protein_selection_window(self):
-        # Read all 'protein.Entry' values from IA_final_peptide.csv files
-
-        # Get all IA_final_peptide.csv files
         ia_files = []
         for root, dirs, files in os.walk(self.input_folder):
             for file in files:
@@ -236,10 +612,9 @@ class TrendlineAnalyzerApp:
                     ia_files.append(os.path.join(root, file))
 
         protein_entries = set()
-
         for file_path in ia_files:
             try:
-                df = pd.read_csv(file_path, encoding='latin1')
+                df = pd.read_csv(file_path, encoding='latin-1')
                 if 'protein.Entry' in df.columns:
                     protein_entries.update(df['protein.Entry'].dropna().unique())
             except Exception as e:
@@ -249,56 +624,38 @@ class TrendlineAnalyzerApp:
             messagebox.showinfo("Info", "No proteins found to exclude.")
             return
 
-        # create the new window
         self.protein_window = tk.Toplevel(self.master)
         self.protein_window.title("Exclude Proteins")
 
-        # Label
         label = tk.Label(self.protein_window, text="Select proteins to include (uncheck to exclude):")
         label.pack()
 
-        # Scrollable frame to hold the checkboxes
         canvas = tk.Canvas(self.protein_window)
         scrollbar = tk.Scrollbar(self.protein_window, orient="vertical", command=canvas.yview)
         scrollable_frame = tk.Frame(canvas)
-
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(
-                scrollregion=canvas.bbox("all")
-            )
-        )
-
+        scrollable_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
-
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        # For each protein entry, create a checkbox
         self.protein_vars = {}
         for protein in sorted(protein_entries):
-            var = tk.IntVar(value=1)  # Checked by default
+            var = tk.IntVar(value=1)
             chk = tk.Checkbutton(scrollable_frame, text=protein, variable=var)
             chk.pack(anchor='w')
             self.protein_vars[protein] = var
 
-        # OK button to confirm selection
         ok_button = tk.Button(self.protein_window, text="OK", command=self.on_protein_selection_ok)
         ok_button.pack()
 
     def on_protein_selection_ok(self):
-        # Collect the proteins to exclude
         self.proteins_to_exclude = [protein for protein, var in self.protein_vars.items() if var.get() == 0]
         self.proteins_to_exclude_set = True
-
-        # Change the label color
         if self.proteins_to_exclude:
             self.exclude_proteins_label.config(fg='green')
         else:
             self.exclude_proteins_label.config(fg='black')
-
-        # Close the window
         self.protein_window.destroy()
 
     def process_files(self):
@@ -307,13 +664,11 @@ class TrendlineAnalyzerApp:
             messagebox.showerror("Error", "Invalid input folder selected.")
             return
 
-        # If exclude proteins is checked but proteins not set, open the selection window
         if self.exclude_proteins_var.get():
             if not self.proteins_to_exclude_set:
                 self.open_protein_selection_window()
                 self.master.wait_window(self.protein_window)
 
-        # Get filtering parameters
         sample_replicate_threshold = self.get_int_value(self.sample_replicate_threshold_entry.get())
         min_product_aa = self.get_float_value(self.min_product_aa_entry.get())
         precursor_inten = self.get_float_value(self.precursor_inten_entry.get())
@@ -327,27 +682,29 @@ class TrendlineAnalyzerApp:
         max_delta_mhp_ppm = self.get_float_value(self.max_delta_mhp_ppm_entry.get())
         retention_time_rsd = self.get_float_value(self.std_deviation_entry.get())
 
-        # Clear output area
         self.output_text.delete(1.0, tk.END)
 
-        # Use temp directory for intermediate files
+        if not self.selected_samples:
+            self.output_text.insert(tk.END, "No samples selected. Please select at least one sample.\n")
+            return
+
         with tempfile.TemporaryDirectory() as temp_folder:
-            # Step 1: Rename and copy files
             self.output_text.insert(tk.END, "Renaming and copying files...\n")
-            renamed_files = rename_csv_files(self.input_folder, temp_folder)
-            if not renamed_files:
+            # rename_csv_files now returns a dictionary: new_path to original sample name
+            self.renamed_dict = rename_csv_files(
+                self.input_folder,
+                temp_folder,
+                self.selected_samples,
+                self.sample_group_overrides
+            )
+            if not self.renamed_dict:
                 self.output_text.insert(tk.END, "No files found to process after renaming.\n")
                 return
 
-            # Step 2: Group files based on separation time and trendline
             file_groups = self.group_files_by_separation_time_and_trendline(temp_folder)
-
-            # Step 3: Process each group separately
             group_dfs = []
             for group_name, files in file_groups.items():
                 self.output_text.insert(tk.END, f"\nProcessing group: {group_name}\n")
-
-                # List the files being merged
                 self.output_text.insert(tk.END, "Merging the following files:\n")
                 for file_path in files:
                     self.output_text.insert(tk.END, f"  {os.path.basename(file_path)}\n")
@@ -358,18 +715,17 @@ class TrendlineAnalyzerApp:
                 else:
                     self.output_text.insert(tk.END, f"No data left after processing group: {group_name}\n")
 
-            # Step 4: Merge all group DataFrames
             if group_dfs:
                 merged_df = pd.concat(group_dfs, ignore_index=True)
                 self.output_text.insert(
                     tk.END,
-                    f"\nTotal peptides after merging all groups: {merged_df.shape[0]} ({merged_df['peptide.seq'].nunique()} unique)\n"
+                    f"\nTotal peptides after merging all groups: {merged_df.shape[0]} "
+                    f"({merged_df['peptide.seq'].nunique()} unique)\n"
                 )
             else:
                 self.output_text.insert(tk.END, "No data left after processing all groups.\n")
                 return
 
-            # Step 5: Apply remaining filters to merged data
             merged_df = self.apply_remaining_filters(
                 merged_df,
                 min_product_aa,
@@ -383,46 +739,111 @@ class TrendlineAnalyzerApp:
                 min_delta_mhp_ppm,
                 max_delta_mhp_ppm
             )
-
             if merged_df.empty:
                 self.output_text.insert(tk.END, "No data left after applying filters.\n")
                 return
 
-            # Step 6: finalize DataFrame
+            # Sort & deduplicate 
             merged_df = merged_df.sort_values(by='peptide.score', ascending=False)
             merged_df = merged_df.drop_duplicates(subset='peptide.seq', keep='first')
 
+            if 'peptide.componentID' in merged_df.columns:
+                merged_df['peptide.componentID'] = range(1, len(merged_df) + 1)
+            else:
+                self.output_text.insert(tk.END, "Warning: 'peptide.componentID' column not found.\n")
+
             self.output_text.insert(
                 tk.END,
-                f"Final peptides after sorting and deduplication: {merged_df.shape[0]} ({merged_df['peptide.seq'].nunique()} unique)\n"
+                f"Final peptides after sorting and deduplication: {merged_df.shape[0]} "
+                f"({merged_df['peptide.seq'].nunique()} unique)\n"
             )
 
-            # Save the merged_df to file
+            # Suspicious peptide review more logic
+            suspicious_df = merged_df.copy()
+            suspicious_df['rt_round'] = suspicious_df['precursor.retT'].round(2)
+
+            if 'peptide.seq' in suspicious_df.columns:
+                suspicious_df['theo_mass'] = suspicious_df['peptide.seq'].apply(lambda s: calculate_theoretical_mass(str(s)))
+            else:
+                suspicious_df['theo_mass'] = None
+            suspicious_df['theo_round'] = suspicious_df['theo_mass'].apply(lambda x: round(x,1) if x is not None else None)
+
+            group_counts = suspicious_df.groupby(['rt_round','theo_round']).size()
+            suspicious_groups = group_counts[group_counts >= 2].index
+            susp_mask = suspicious_df.set_index(['rt_round','theo_round']).index.isin(suspicious_groups)
+            susp_df = suspicious_df[susp_mask].copy()
+
+            if not susp_df.empty:
+                susp_df.drop(columns=['rt_round','theo_round'], inplace=True, errors='ignore')
+
+                review_win = SuspiciousReviewWindow(self.master, susp_df)
+                self.master.wait_window(review_win)
+
+                if review_win.result is not None:
+                    all_susp_indices = susp_df.index.tolist()
+                    to_remove = [idx for idx in all_susp_indices if idx not in review_win.result]
+                    merged_df = merged_df.drop(index=to_remove)
+
+            self.output_text.insert(
+                tk.END,
+                f"Final peptides after suspicious-peptide review: {merged_df.shape[0]} "
+                f"({merged_df['peptide.seq'].nunique()} unique)\n"
+            )
+
             parent_directory = os.path.dirname(self.input_folder)
             output_folder = os.path.join(parent_directory, "Merged_final_peptide_excel_sheets")
             os.makedirs(output_folder, exist_ok=True)
 
-            # Generate filename inc timestamp, ending with 'IA_final_peptide.csv'
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_filename = f"{timestamp}_IA_final_peptide.csv"
-            output_path = os.path.join(output_folder, output_filename)
+            # Output files format
+            if self.output_format_var.get() == "HDExaminer":
+                
+                merged_df['sample_type'] = merged_df['origin_file'].apply(
+                    lambda sample: self.sample_type_overrides.get(sample, "")
+                )
+                new_cols = ['origin_file', 'sample_type'] + [c for c in merged_df.columns if c not in ['origin_file','sample_type']]
+                merged_df = merged_df[new_cols]
 
-            # Save the merged_df to the output_path
-            merged_df.to_csv(output_path, index=False)
-            self.output_text.insert(tk.END, f"\nFinal result saved to: {output_path}\n")
+                # Split merged_df into two: one for MP and one for SP
+                df_mp = merged_df[merged_df['sample_type'] == 'MP']
+                df_sp = merged_df[merged_df['sample_type'] == 'SP']
 
-            messagebox.showinfo("Success", f"Processing completed. Final result saved to: {output_path}")
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                final_count_mp = df_mp.shape[0]
+                final_count_sp = df_sp.shape[0]
+                output_filename_mp = f"{timestamp}_{final_count_mp}_Multi_pass_peptides_only_IA_final_peptide.csv"
+                output_filename_sp = f"{timestamp}_{final_count_sp}_Single_pass_peptides_only_IA_final_peptide.csv"
+                output_path_mp = os.path.join(output_folder, output_filename_mp)
+                output_path_sp = os.path.join(output_folder, output_filename_sp)
 
-            # No need to delete the temporary folder; it is automatically deleted when exiting the 'with' block!
+                df_mp.to_csv(output_path_mp, index=False, encoding='latin-1')
+                df_sp.to_csv(output_path_sp, index=False, encoding='latin-1')
 
-        # Reset variables to allow re-processing
+                self.output_text.insert(tk.END, f"\nFinal MP peptides saved to: {output_path_mp}\n")
+                self.output_text.insert(tk.END, f"Final SP peptides saved to: {output_path_sp}\n")
+                messagebox.showinfo("Success", f"Processing completed.\nMP peptides: {output_path_mp}\nSP peptides: {output_path_sp}")
+            else:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                final_count = merged_df.shape[0]
+                output_filename = f"{timestamp}_{final_count}_IA_final_peptide.csv"
+                output_path = os.path.join(output_folder, output_filename)
+                merged_df.to_csv(output_path, index=False, encoding='latin-1')
+                self.output_text.insert(tk.END, f"\nFinal result saved to: {output_path}\n")
+                messagebox.showinfo("Success", f"Processing completed. Final result saved to: {output_path}")
+
+        # Reset for next run
         self.proteins_to_exclude = []
         self.proteins_to_exclude_set = False
         self.exclude_proteins_var.set(0)
         self.exclude_proteins_checkbox.config(state=tk.DISABLED)
         self.exclude_proteins_label.config(fg='black')
+        self.selected_samples = []
+        self.sample_group_overrides = {}
 
     def group_files_by_separation_time_and_trendline(self, folder_path):
+        """
+        Groups files by the first three underscore-delimited tokens in the filename:
+          e.g. "0_3_OriginalSample" -> group "0_3_OriginalSample"
+        """
         file_groups = {}
         for file in os.listdir(folder_path):
             if file.endswith(".csv"):
@@ -430,25 +851,26 @@ class TrendlineAnalyzerApp:
                 file_name_without_ext = os.path.splitext(file)[0]
                 parts = file_name_without_ext.split('_')
                 if len(parts) >= 3:
-                    group_key = '_'.join(parts[:3])  # Use the first 3 parts for grouping
-                    if group_key not in file_groups:
-                        file_groups[group_key] = []
-                    file_groups[group_key].append(file_path)
+                    group_key = "_".join(parts[:3])
                 else:
-                    self.output_text.insert(tk.END, f"Skipping file with unexpected name format: {file}\n")
+                    group_key = file_name_without_ext
+                file_groups.setdefault(group_key, []).append(file_path)
         return file_groups
 
     def process_group(self, files, group_name, sample_replicate_threshold, retention_time_rsd):
-        # Read all files in the group into a DataFrame
         group_df = pd.DataFrame()
         for file_path in files:
             try:
-                df = pd.read_csv(file_path, encoding='latin1')
+                # Read .CSV
+                df = pd.read_csv(file_path, encoding='latin-1')
                 if df.empty:
                     self.output_text.insert(tk.END, f"File '{file_path}' is empty, skipping.\n")
                     continue
-                # Ensure 'peptide.score' is numeric, convert non-numeric to NaN
+
                 df['peptide.score'] = pd.to_numeric(df['peptide.score'], errors='coerce')
+                # Set origin_file to the original sample name from self.renamed_dict
+                df['origin_file'] = self.renamed_dict[file_path]
+
                 group_df = pd.concat([group_df, df], ignore_index=True)
             except Exception as e:
                 self.output_text.insert(tk.END, f"Error reading file '{file_path}': {e}\n")
@@ -457,7 +879,6 @@ class TrendlineAnalyzerApp:
             self.output_text.insert(tk.END, f"No data found in group: {group_name}\n")
             return group_df
 
-        # Output the number of peptides before filtering so people can see the process
         total_peptides = group_df.shape[0]
         unique_peptides = group_df['peptide.seq'].nunique()
         self.output_text.insert(
@@ -465,41 +886,26 @@ class TrendlineAnalyzerApp:
             f"Total peptides before filtering in group {group_name}: {total_peptides} ({unique_peptides} unique)\n"
         )
 
-        # Remove peptides with peptide.score <= 0 or NaN
         group_df = group_df[group_df['peptide.score'].notna() & (group_df['peptide.score'] > 0)]
-
         if group_df.empty:
-            self.output_text.insert(
-                tk.END,
-                f"No data left after removing peptides with score <= 0 in group: {group_name}\n"
-            )
+            self.output_text.insert(tk.END, f"No data left after removing peptides with score <= 0 in group: {group_name}\n")
             return group_df
 
-        # Exclude proteins if any
         if self.proteins_to_exclude:
             group_df = group_df[~group_df['protein.Entry'].isin(self.proteins_to_exclude)]
             if group_df.empty:
-                self.output_text.insert(
-                    tk.END,
-                    f"No data left after protein exclusion in group: {group_name}\n"
-                )
+                self.output_text.insert(tk.END, f"No data left after protein exclusion in group: {group_name}\n")
                 return group_df
 
-        # Averaging out numerical columns
         numeric_columns = [
-            'peptide.MatchedProducts',
-            'peptide.seqLength',
-            'precursor.inten',
-            'peptide.score',
-            'peptide.MatchedProductsSumInten',
-            'peptidePrecursor.deltaMhpPPM',
-            'peptide.ConsectiveMatchedProducts'
+            'peptide.MatchedProducts', 'peptide.seqLength', 'precursor.inten',
+            'peptide.score', 'peptide.MatchedProductsSumInten',
+            'peptidePrecursor.deltaMhpPPM', 'peptide.ConsectiveMatchedProducts'
         ]
         for col in numeric_columns:
             if col in group_df.columns:
                 group_df[f'avg_{col}'] = group_df.groupby('peptide.seq')[col].transform('mean')
 
-        # Apply sample replicate threshold within the group
         if sample_replicate_threshold is not None:
             peptide_counts = group_df.groupby('peptide.seq')['peptide.seq'].transform('count')
             group_df = group_df[peptide_counts >= sample_replicate_threshold]
@@ -508,41 +914,27 @@ class TrendlineAnalyzerApp:
                 f"Peptides after sample replicate threshold in group {group_name}: {group_df.shape[0]} ({group_df['peptide.seq'].nunique()} unique)\n"
             )
         else:
-            self.output_text.insert(
-                tk.END,
-                f"Skipping sample replicate threshold in group {group_name} (parameter not set or zero).\n"
-            )
+            self.output_text.insert(tk.END, f"Skipping sample replicate threshold in group {group_name} (parameter not set or zero).\n")
 
         if group_df.empty:
-            self.output_text.insert(
-                tk.END,
-                f"No data left after applying sample replicate threshold in group: {group_name}\n"
-            )
+            self.output_text.insert(tk.END, f"No data left after applying sample replicate threshold in group: {group_name}\n")
             return group_df
 
-        # Apply retention time RSD within the group
+        # If replicate threshold >= 3, optionally do retention time RSD
         if (sample_replicate_threshold is not None and sample_replicate_threshold >= 3 and
-                retention_time_rsd is not None):
+                retention_time_rsd is not None and 'precursor.retT' in group_df.columns):
             grouped_df = group_df.groupby('peptide.seq')
-
             for peptide_seq, group_df_inner in grouped_df:
                 average = group_df_inner['precursor.retT'].mean()
                 deviations = (group_df_inner['precursor.retT'] - average) ** 2
                 sum_squared_results = deviations.sum()
                 num_datapoints = group_df_inner.shape[0]
-
                 if num_datapoints > 0:
                     variance = sum_squared_results / num_datapoints
                     standard_deviation = variance ** 0.5
                     relative_standard_deviation = (standard_deviation * 100) / average if average != 0 else 0
-
-                    # Truncate RSD to one decimal place without rounding
                     truncated_rsd = int(relative_standard_deviation * 10) / 10.0
-
-                    # Update DataFrame with truncated RSD
                     group_df.loc[group_df_inner.index, 'relative SD'] = truncated_rsd
-
-            # Apply retention time RSD threshold
             group_df = group_df[group_df['relative SD'] <= retention_time_rsd]
             self.output_text.insert(
                 tk.END,
@@ -551,14 +943,11 @@ class TrendlineAnalyzerApp:
         else:
             self.output_text.insert(
                 tk.END,
-                f"Skipping retention time RSD calculation in group {group_name} (sample replicate threshold < 3 or parameter not set or zero).\n"
+                f"Skipping retention time RSD calculation in group {group_name} (replicate threshold < 3, no retT column, or parameter not set).\n"
             )
 
         if group_df.empty:
-            self.output_text.insert(
-                tk.END,
-                f"No data left after applying retention time RSD in group: {group_name}\n"
-            )
+            self.output_text.insert(tk.END, f"No data left after applying retention time RSD in group: {group_name}\n")
             return group_df
 
         return group_df
@@ -567,9 +956,6 @@ class TrendlineAnalyzerApp:
                                 max_peptide_length, min_matched_products, min_consec_matched_products,
                                 min_matched_products_inten, min_peptide_score, min_delta_mhp_ppm,
                                 max_delta_mhp_ppm):
-        # Apply other filters based on the averaged-out values
-
-        # Score Filter
         if min_peptide_score is not None:
             df = df[df['avg_peptide.score'] >= min_peptide_score]
             self.output_text.insert(
@@ -582,13 +968,9 @@ class TrendlineAnalyzerApp:
         if df.empty:
             return df
 
-        # Products per Amino Acid Filter
         if min_product_aa is not None:
-            # Apply truncation logic to the average number of products per amino acid to 2 decimal places
             rounded_products = df['avg_peptide.MatchedProducts'].round()
-            truncated_product_aa = (rounded_products / df['avg_peptide.seqLength']).apply(
-                lambda x: int(x * 100) / 100.0
-            )
+            truncated_product_aa = (rounded_products / df['avg_peptide.seqLength']).apply(lambda x: int(x * 100) / 100.0)
             df = df[truncated_product_aa >= min_product_aa]
             self.output_text.insert(
                 tk.END,
@@ -600,7 +982,6 @@ class TrendlineAnalyzerApp:
         if df.empty:
             return df
 
-        # Intensity Filter
         if precursor_inten is not None:
             df = df[df['avg_precursor.inten'] >= precursor_inten]
             self.output_text.insert(
@@ -613,13 +994,10 @@ class TrendlineAnalyzerApp:
         if df.empty:
             return df
 
-        # Sequence Length Filter
-        if ((min_peptide_length is not None) or (max_peptide_length is not None)):
+        if (min_peptide_length is not None) or (max_peptide_length is not None):
             if min_peptide_length is not None and max_peptide_length is not None:
-                df = df[
-                    (df['avg_peptide.seqLength'] >= min_peptide_length) &
-                    (df['avg_peptide.seqLength'] <= max_peptide_length)
-                ]
+                df = df[(df['avg_peptide.seqLength'] >= min_peptide_length) &
+                        (df['avg_peptide.seqLength'] <= max_peptide_length)]
             elif min_peptide_length is not None:
                 df = df[df['avg_peptide.seqLength'] >= min_peptide_length]
             elif max_peptide_length is not None:
@@ -634,9 +1012,7 @@ class TrendlineAnalyzerApp:
         if df.empty:
             return df
 
-        # Matched Products Filter
         if min_matched_products is not None:
-            # Round the averaged matched products to nearest integer
             rounded_matched_products = df['avg_peptide.MatchedProducts'].round()
             df = df[rounded_matched_products >= min_matched_products]
             self.output_text.insert(
@@ -649,9 +1025,7 @@ class TrendlineAnalyzerApp:
         if df.empty:
             return df
 
-        # Consecutive Products Filter
         if min_consec_matched_products is not None:
-            # Round the averaged consecutive matched products to nearest integer
             rounded_consec_products = df['avg_peptide.ConsectiveMatchedProducts'].round()
             df = df[rounded_consec_products >= min_consec_matched_products]
             self.output_text.insert(
@@ -659,15 +1033,11 @@ class TrendlineAnalyzerApp:
                 f"Peptides after consecutive products filter: {df.shape[0]} ({df['peptide.seq'].nunique()} unique)\n"
             )
         else:
-            self.output_text.insert(
-                tk.END,
-                "Skipping consecutive products filter (parameter not set or zero).\n"
-            )
+            self.output_text.insert(tk.END, "Skipping consecutive products filter (parameter not set or zero).\n")
 
         if df.empty:
             return df
 
-        # Sum Intensity for Products Filter
         if min_matched_products_inten is not None:
             df = df[df['avg_peptide.MatchedProductsSumInten'] >= min_matched_products_inten]
             self.output_text.insert(
@@ -675,16 +1045,12 @@ class TrendlineAnalyzerApp:
                 f"Peptides after sum intensity for products filter: {df.shape[0]} ({df['peptide.seq'].nunique()} unique)\n"
             )
         else:
-            self.output_text.insert(
-                tk.END,
-                "Skipping sum intensity for products filter (parameter not set or zero).\n"
-            )
+            self.output_text.insert(tk.END, "Skipping sum intensity for products filter (parameter not set or zero).\n")
 
         if df.empty:
             return df
 
-        # Mass Error Filter
-        if ((min_delta_mhp_ppm is not None) or (max_delta_mhp_ppm is not None)):
+        if (min_delta_mhp_ppm is not None) or (max_delta_mhp_ppm is not None):
             if min_delta_mhp_ppm is not None and max_delta_mhp_ppm is not None:
                 df = df[
                     (df['avg_peptidePrecursor.deltaMhpPPM'] >= min_delta_mhp_ppm) &
@@ -701,29 +1067,19 @@ class TrendlineAnalyzerApp:
         else:
             self.output_text.insert(tk.END, "Skipping mass error filter (parameters not set or zero).\n")
 
-        if df.empty:
-            return df
-
-        # Remove extra averaged-out columns
         numeric_columns = [
-            'peptide.MatchedProducts',
-            'peptide.seqLength',
-            'precursor.inten',
-            'peptide.score',
-            'peptide.MatchedProductsSumInten',
-            'peptidePrecursor.deltaMhpPPM',
-            'peptide.ConsectiveMatchedProducts'
+            'peptide.MatchedProducts', 'peptide.seqLength', 'precursor.inten',
+            'peptide.score', 'peptide.MatchedProductsSumInten',
+            'peptidePrecursor.deltaMhpPPM', 'peptide.ConsectiveMatchedProducts'
         ]
-        df = df.drop(
-            columns=[f'avg_{col}' for col in numeric_columns if f'avg_{col}' in df.columns],
-            errors='ignore'
-        )
+        drop_cols = [f'avg_{col}' for col in numeric_columns if f'avg_{col}' in df.columns]
+        df = df.drop(columns=drop_cols, errors='ignore')
 
-        # Remove 'relative SD' column if it exists
         if 'relative SD' in df.columns:
             df = df.drop(columns=['relative SD'])
 
         return df
+
 
 def main():
     root = tk.Tk()
