@@ -1,515 +1,699 @@
-# -*- coding: latin-1 -*-
+import os
+import pandas as pd
 import tkinter as tk
 from tkinter import filedialog, messagebox
-import pandas as pd
-import matplotlib.pyplot as plt
-import numpy as np
-import os
 from datetime import datetime
-import subprocess
-import random
 
-class TrendlineApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Trendline Finder and Graph Tool")
-        self.root.geometry("700x500")  
+class TrendlineAnalyzerApp:
+    def __init__(self, master):
+        self.master = master
+        master.title("Trendline Analyzer with Filtering Parameters")
 
-        # canvas
-        self.canvas = tk.Canvas(root)
-        self.vsb = tk.Scrollbar(root, orient="vertical", command=self.canvas.yview)
-        self.canvas.configure(yscrollcommand=self.vsb.set)
-        self.vsb.pack(side="right", fill="y")
-        self.canvas.pack(side="left", fill="both", expand=True)
-        
-        # frame
-        self.main_frame = tk.Frame(self.canvas)
-        self.canvas.create_window((0, 0), window=self.main_frame, anchor="nw")
-        self.main_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
-        
-        # algorithm selection
-        self.frame_algorithm = tk.LabelFrame(self.main_frame, text="Ion search algorithm to be used", padx=10, pady=10)
-        self.frame_algorithm.pack(fill="x", padx=10, pady=10)
-        self.apex_mode_var = tk.StringVar(value="Apex3D")
-        tk.Radiobutton(self.frame_algorithm, text="Apex3D (original PLGS)", variable=self.apex_mode_var, value="Apex3D").pack(side="left", padx=5, pady=5)
-        tk.Radiobutton(self.frame_algorithm, text="ApexRT", variable=self.apex_mode_var, value="ApexRT").pack(side="left", padx=5, pady=5)
+        self.input_folder = ''
+        self.results = ''
+        self.best_trendline_data = None  
+        self.proteins_to_exclude = []    # proteins to exclude
+        self.proteins_to_exclude_set = False  
+        self.separation_time = None  
+        self.separation_time_set = False  
+        self.check_vars = {}  
 
-        # Variables for .raw processing
-        self.raw_folder = ""
-        self.output_folder = ""
-        self.processed_data_folder = ""  
+        # GUI elements
+        self.create_widgets()
 
-        # Variables for raw processing parameters
-        self.le_threshold_var = tk.StringVar(value="300")
-        self.he_threshold_var = tk.StringVar(value="150")
-        self.ret_start_var = tk.StringVar(value="1.0")
-        self.ret_end_var = tk.StringVar(value="10")
-        self.initial_trendline_var = tk.StringVar(value="11-13")
-        self.lockmass_z1_var = tk.StringVar(value="556.2771")
-        self.lockmass_z2_var = tk.StringVar(value="")
-        self.modify_resolution_var = tk.BooleanVar(value=True)
-        
-        # Graph generation parameters
-        self.colour_option_var = tk.StringVar(value="Colour by trendline cluster")
-        self.display_trendlines_var = tk.BooleanVar(value=True)
-        self.x_axis_var = tk.StringVar(value="200")
-        self.y_axis_var = tk.StringVar(value="40")
-        self.trendline_number_var = tk.StringVar(value="5")  # Moved to graph section
-        self.save_trendlines_var = tk.BooleanVar(value=True)
-        self.custom_color_var = tk.StringVar(value="black")
-        
-        
-        self.frame_process = tk.LabelFrame(self.main_frame, text="Raw Data Processing", padx=10, pady=10)
-        self.frame_process.pack(fill="x", padx=10, pady=10)
-        self.create_process_inputs(self.frame_process)
-        
-        self.frame_graph = tk.LabelFrame(self.main_frame, text="Graph Generation", padx=10, pady=10)
-        self.frame_graph.pack(fill="x", padx=10, pady=10)
-        self.create_graph_inputs(self.frame_graph)
-        
-    def create_process_inputs(self, parent):
-        row = 0
-        tk.Label(parent, text="Raw Data Folder:").grid(row=row, column=0, sticky='e', padx=5, pady=5)
-        self.raw_folder_entry = tk.Entry(parent, width=50)
-        self.raw_folder_entry.grid(row=row, column=1, padx=5, pady=5)
-        tk.Button(parent, text="Browse", command=self.browse_raw_folder).grid(row=row, column=2, padx=5, pady=5)
-        row += 1
-        
-        tk.Label(parent, text="Output Folder (for Processed Data):").grid(row=row, column=0, sticky='e', padx=5, pady=5)
-        self.output_folder_entry = tk.Entry(parent, width=50)
-        self.output_folder_entry.grid(row=row, column=1, padx=5, pady=5)
-        tk.Button(parent, text="Browse", command=self.browse_output_folder).grid(row=row, column=2, padx=5, pady=5)
-        row += 1
-        
-        # processing parameters
-        tk.Label(parent, text="Low Energy Threshold:").grid(row=row, column=0, sticky='e', padx=5, pady=5)
-        tk.Entry(parent, textvariable=self.le_threshold_var, width=10).grid(row=row, column=1, sticky='w', padx=5, pady=5)
-        row += 1
-        tk.Label(parent, text="High Energy Threshold:").grid(row=row, column=0, sticky='e', padx=5, pady=5)
-        tk.Entry(parent, textvariable=self.he_threshold_var, width=10).grid(row=row, column=1, sticky='w', padx=5, pady=5)
-        row += 1
-        tk.Label(parent, text="Retention Start Time (min):").grid(row=row, column=0, sticky='e', padx=5, pady=5)
-        tk.Entry(parent, textvariable=self.ret_start_var, width=10).grid(row=row, column=1, sticky='w', padx=5, pady=5)
-        row += 1
-        tk.Label(parent, text="Retention End Time (min):").grid(row=row, column=0, sticky='e', padx=5, pady=5)
-        tk.Entry(parent, textvariable=self.ret_end_var, width=10).grid(row=row, column=1, sticky='w', padx=5, pady=5)
-        row += 1
-        tk.Label(parent, text="Initial Trendline (e.g., 11-13):").grid(row=row, column=0, sticky='e', padx=5, pady=5)
-        tk.Entry(parent, textvariable=self.initial_trendline_var, width=15).grid(row=row, column=1, sticky='w', padx=5, pady=5)
-        row += 1
-        tk.Label(parent, text="LockMass Z1:").grid(row=row, column=0, sticky='e', padx=5, pady=5)
-        tk.Entry(parent, textvariable=self.lockmass_z1_var, width=15).grid(row=row, column=1, sticky='w', padx=5, pady=5)
-        row += 1
-        tk.Label(parent, text="LockMass Z2:").grid(row=row, column=0, sticky='e', padx=5, pady=5)
-        tk.Entry(parent, textvariable=self.lockmass_z2_var, width=15).grid(row=row, column=1, sticky='w', padx=5, pady=5)
-        row += 1
-        self.modify_resolution_check = tk.Checkbutton(parent, text="Change Resolution to 40000", variable=self.modify_resolution_var)
-        self.modify_resolution_check.grid(row=row, column=0, columnspan=3, sticky='w', padx=5, pady=5)
-        row += 1
-        tk.Button(parent, text="Process Raw Data", command=self.process_raw_data).grid(row=row, column=0, columnspan=3, pady=10)
-        
-    def create_graph_inputs(self, parent):
-        row = 0
-        tk.Label(parent, text="Processed Data Folder:").grid(row=row, column=0, sticky='e', padx=5, pady=5)
-        self.processed_folder_entry = tk.Entry(parent, width=50)
-        self.processed_folder_entry.grid(row=row, column=1, padx=5, pady=5)
-        tk.Button(parent, text="Browse", command=self.browse_processed_folder).grid(row=row, column=2, padx=5, pady=5)
-        row += 1
-        
-        tk.Label(parent, text="Graphs Output Folder:").grid(row=row, column=0, sticky='e', padx=5, pady=5)
-        self.graphs_folder_entry = tk.Entry(parent, width=50)
-        self.graphs_folder_entry.grid(row=row, column=1, padx=5, pady=5)
-        tk.Button(parent, text="Browse", command=self.browse_graphs_folder).grid(row=row, column=2, padx=5, pady=5)
-        row += 1
+    def create_widgets(self):
+       
+        left_frame = tk.Frame(self.master)
+        left_frame.grid(row=0, column=0, padx=10, pady=10, sticky='nw')
 
-        tk.Label(parent, text="Trendline Numbers (min 4):").grid(row=row, column=0, sticky='e', padx=5, pady=5)
-        tk.Entry(parent, textvariable=self.trendline_number_var, width=10).grid(row=row, column=1, sticky='w', padx=5, pady=5)
-        row += 1
-        
-        tk.Label(parent, text="Graph Colour Options:").grid(row=row, column=0, sticky='e', padx=5, pady=5)
-        tk.Radiobutton(parent, text="Colour by cluster", variable=self.colour_option_var, value="Colour by cluster").grid(row=row, column=1, sticky='w', padx=5, pady=5)
-        tk.Radiobutton(parent, text="Randomize graph colour", variable=self.colour_option_var, value="Randomize graph colour").grid(row=row, column=2, sticky='w', padx=5, pady=5)
-        row += 1
-        tk.Radiobutton(parent, text="Custom color", variable=self.colour_option_var, value="Custom color", command=self.custom_color_option_changed).grid(row=row, column=1, sticky='w', padx=5, pady=5)
-        custom_colors = ["red", "green", "blue", "orange", "purple", "cyan", "magenta", "black", "gold", "olive", "teal", "navy"]
-        self.custom_color_optionmenu = tk.OptionMenu(parent, self.custom_color_var, *custom_colors)
-        self.custom_color_optionmenu.configure(state="disabled")
-        self.custom_color_optionmenu.grid(row=row, column=2, padx=5, pady=5)
-        row += 1
+        right_frame = tk.Frame(self.master)
+        right_frame.grid(row=0, column=1, padx=10, pady=10, sticky='ne')
 
-        self.display_trendlines_check = tk.Checkbutton(parent, text="Display trendlines", variable=self.display_trendlines_var, command=self.update_save_trendlines_state)
-        self.display_trendlines_check.grid(row=row, column=0, columnspan=3, sticky='w', padx=5, pady=5)
-        row += 1
-        
-        self.save_trendlines_check = tk.Checkbutton(parent, text="Save trendlines to file", variable=self.save_trendlines_var)
-        self.save_trendlines_check.grid(row=row, column=0, columnspan=3, sticky='w', padx=5, pady=5)
-        row += 1
+        # Header
+        self.header_label = tk.Label(
+            left_frame,
+            text="The best performing trendline will appear here",
+            font=("Arial", 16),
+            fg="black"
+        )
+        self.header_label.grid(row=0, column=0, columnspan=3, padx=10, pady=10)
 
-        tk.Label(parent, text="X-axis size (Mobility):").grid(row=row, column=0, sticky='e', padx=5, pady=5)
-        tk.Entry(parent, textvariable=self.x_axis_var, width=10).grid(row=row, column=1, sticky='w', padx=5, pady=5)
-        row += 1
+        # Input Folder
+        self.input_label = tk.Label(left_frame, text="Select Input Folder:")
+        self.input_label.grid(row=1, column=0, padx=5, pady=5, sticky='e')
 
-        tk.Label(parent, text="Y-axis size (Mobility FWHM):").grid(row=row, column=0, sticky='e', padx=5, pady=5)
-        tk.Entry(parent, textvariable=self.y_axis_var, width=10).grid(row=row, column=1, sticky='w', padx=5, pady=5)
-        row += 1
+        self.input_entry = tk.Entry(left_frame, width=45)
+        self.input_entry.grid(row=1, column=1, padx=5, pady=5, sticky='w')
 
-        tk.Button(parent, text="Generate Graphs", command=self.generate_graphs).grid(row=row, column=0, columnspan=3, pady=10)
-        
-    def custom_color_option_changed(self):
-        if self.colour_option_var.get() == "Custom color":
-            self.custom_color_optionmenu.configure(state="normal")
-        else:
-            self.custom_color_optionmenu.configure(state="disabled")
-            
-    def update_save_trendlines_state(self):
-        # Enable the save trendlines checkbutton only if Display trendlines is checked
-        if self.display_trendlines_var.get():
-            self.save_trendlines_check.configure(state="normal")
-        else:
-            self.save_trendlines_check.configure(state="disabled")
-        
-    def browse_raw_folder(self):
-        folder = filedialog.askdirectory(title=".raw Data Folder:")
-        if folder:
-            self.raw_folder_entry.delete(0, tk.END)
-            self.raw_folder_entry.insert(0, folder)
-            
-    def browse_output_folder(self):
-        folder = filedialog.askdirectory(title="Output Folder:")
-        if folder:
-            self.output_folder_entry.delete(0, tk.END)
-            self.output_folder_entry.insert(0, folder)
-            
-    def browse_processed_folder(self):
-        folder = filedialog.askdirectory(title="Processed Files:")
-        if folder:
-            self.processed_folder_entry.delete(0, tk.END)
-            self.processed_folder_entry.insert(0, folder)
-            
-    def browse_graphs_folder(self):
-        folder = filedialog.askdirectory(title="Output Folder for Graphs")
-        if folder:
-            self.graphs_folder_entry.delete(0, tk.END)
-            self.graphs_folder_entry.insert(0, folder)
-            
-    def process_raw_data(self):
-        # Process the raw data using the parameters
-        self.raw_folder = self.raw_folder_entry.get()
-        self.output_folder = self.output_folder_entry.get()
-        
-        if not self.raw_folder or not os.path.isdir(self.raw_folder):
-            messagebox.showerror("Error", "Please select a valid parent folder containing .raw sub-folders.")
-            return
+        self.browse_button = tk.Button(left_frame, text="Browse", command=self.browse_folder)
+        self.browse_button.grid(row=1, column=2, padx=0, pady=5, sticky='w')
 
-        if not self.output_folder:
-            messagebox.showerror("Error", "Please select or create a valid folder for the processed data.")
-            return
-        
-        if not os.path.isdir(self.output_folder):
-            try:
-                os.makedirs(self.output_folder)
-            except Exception as e:
-                messagebox.showerror("Error", f"Could not create output folder: {e}")
-                return
+        # Output 
+        self.output_text = tk.Text(left_frame, width=80, height=20)
+        self.output_text.grid(row=2, column=0, columnspan=2, padx=10, pady=10)
 
-        try:
-            self.le_threshold = int(self.le_threshold_var.get())
-            self.he_threshold = int(self.he_threshold_var.get())
-            self.ret_start = float(self.ret_start_var.get())
-            self.ret_end = float(self.ret_end_var.get())
-        except ValueError:
-            messagebox.showerror("Error", "Numeric fields must contain valid numbers.")
-            return
         
-        try:
-            drift_start, drift_end = self.initial_trendline_var.get().split("-")
-            self.driftFWHMStart = float(drift_start)
-            self.driftFWHMEnd = float(drift_end)
-        except ValueError:
-            messagebox.showerror("Error", "Initial Trendline must be in format 'start-end'.")
-            return
-        
-        try:
-            self.lockmass_z1 = float(self.lockmass_z1_var.get())
-            if self.lockmass_z2_var.get():
-                self.lockmass_z2 = float(self.lockmass_z2_var.get())
-            else:
-                self.lockmass_z2 = None
-        except ValueError:
-            messagebox.showerror("Error", "LockMass fields must contain valid numbers.")
-            return
-        
-        # look through everything
-        self.raw_folders = []
-        for root_dir, dirs, files in os.walk(self.raw_folder):
-            for d in dirs:
-                if d.lower().endswith('.raw'):
-                    self.raw_folders.append(os.path.join(root_dir, d))
-                    
-        if not self.raw_folders:
-            messagebox.showerror("Error", "No .raw folders found in the selected folder.")
-            return
-        
-        if self.modify_resolution_var.get():
-            self.modify_resolution_in_folder(self.raw_folder, 40000)
-        
-        processed_data_folder = os.path.join(self.output_folder, "Apex3D_processed_data")
-        os.makedirs(processed_data_folder, exist_ok=True)
-        self.processed_data_folder = processed_data_folder
-        
-        # Check chosen algorithm
-        apex_mode = self.apex_mode_var.get()
-        if apex_mode == "ApexRT":
-            apex_exe = "ApexRT.exe"
-            apex_exe_path = os.path.join("C:/PLGS3.0.3/lib/apex3d", apex_exe)
-            if not os.path.isfile(apex_exe_path):
-                missing_dir_str = os.path.join("C:/PLGS3.0.3/lib/apex3d")
-                messagebox.showerror(
-                    "Error",
-                    f"ApexRT.exe could not be found in {missing_dir_str}. "
-                    "ApexRT is the newer algorithm, but does not naturally come with PLGS 3.0.3. "
-                    "It must be manually placed there by you. Please do so, or process with Apex3D."
-                )
-                return
-        else:
-            apex_exe = "Apex3d64.exe"
-            apex_exe_path = os.path.join("C:/PLGS3.0.3/lib/apex3d", apex_exe)
+        self.scrollbar = tk.Scrollbar(left_frame, command=self.output_text.yview, width=12)
+        self.scrollbar.grid(row=2, column=2, sticky='ns')
+        self.output_text['yscrollcommand'] = self.scrollbar.set
 
-        # Create a batch file to process each .raw folder.
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        batch_file_path = os.path.join(processed_data_folder, f"run_apex_{timestamp}.bat")
         
-        with open(batch_file_path, 'w') as batch_file:
-            batch_file.write('@echo off\n')
-            for raw_dir in self.raw_folders:
-                raw_basename = os.path.splitext(os.path.basename(raw_dir))[0]
-                sample_output_folder = os.path.join(self.processed_data_folder, f"{raw_basename}_output")
-                sample_output_folder_batch = sample_output_folder.replace("\\", "/")
-                raw_dir_batch = raw_dir.replace("\\", "/")
-                
-                batch_file.write(f'if not exist "{sample_output_folder_batch}" mkdir "{sample_output_folder_batch}"\n')
-                command = f'"{apex_exe_path}" -pRawDirName "{raw_dir_batch}" -outputDirName "{sample_output_folder_batch}" -outputUserDirName "{sample_output_folder_batch}"'
-                command += f' -lockMassZ1 {self.lockmass_z1}'
-                if self.lockmass_z2 is not None:
-                    command += f' -lockMassZ2 {self.lockmass_z2}'
-                command += f' -lockMassToleranceAMU 0.3'
-                command += f' -leThresholdCounts {self.le_threshold}'
-                command += f' -heThresholdCounts {self.he_threshold}'
-                command += f' -startingRTMin {self.ret_start}'
-                command += f' -endingRTMin {self.ret_end}'
-                command += f' -driftFWHMStart {self.driftFWHMStart}'
-                command += f' -driftFWHMEnd {self.driftFWHMEnd}'
-                command += f' -PLGS'
-                batch_file.write(command + '\n')
-            batch_file.write('echo Apex processing completed.\n')
-            batch_file.write('pause\n')
-            
-        try:
-            subprocess.run(batch_file_path, check=True)
-        except subprocess.CalledProcessError as e:
-            messagebox.showerror("Error", f"Apex processing failed: {e}")
-            return
+
+        # Separation Time 
+        self.separation_time_label = tk.Label(
+            right_frame,
+            text="IM-MS separation time chosen for analysis: None",
+            fg="black",
+            cursor="hand2"
+        )
+        self.separation_time_label.grid(row=0, column=0, columnspan=2, padx=10, pady=5, sticky='w')
+        self.separation_time_label.bind("<Button-1>", lambda e: self.open_separation_time_selection_window())
+
+        # Exclude Proteins 
+        self.exclude_proteins_frame = tk.Frame(right_frame)
+        self.exclude_proteins_frame.grid(row=1, column=0, columnspan=2, padx=10, pady=5, sticky='w')
+
+        self.exclude_proteins_var = tk.IntVar()
+        self.exclude_proteins_checkbox = tk.Checkbutton(
+            self.exclude_proteins_frame,
+            variable=self.exclude_proteins_var,
+            state=tk.DISABLED,
+            command=self.exclude_proteins_checked
+        )
+        self.exclude_proteins_checkbox.pack(side='left')
+
+        self.exclude_proteins_label = tk.Label(
+            self.exclude_proteins_frame,
+            text="Exclude proteins..."
+        )
+        self.exclude_proteins_label.pack(side='left')
+
+        self.create_filtering_fields(right_frame)
+
+        # Process Button
+        self.process_button = tk.Button(
+            right_frame,
+            text="Process Trendlines",
+            command=self.process_trendlines
+        )
+        self.process_button.grid(row=16, column=1, padx=10, pady=20)
+
+    def create_filtering_fields(self, parent):
+        # Filtering parameter
+        self.label_and_entry(parent, "Sample replicate threshold:", "3", 2, 0)
+        self.sample_replicate_threshold_entry = self.entry
+
+        self.label_and_entry(parent, "Min. products per amino acid:", "0.11", 3, 0)
+        self.min_product_aa_entry = self.entry
+
+        self.label_and_entry(parent, "Min. intensity:", "1000", 4, 0)
+        self.precursor_inten_entry = self.entry
+
+        self.label_and_entry(parent, "Min. sequence length:", "5", 5, 0)
+        self.min_peptide_length_entry = self.entry
+
+        self.label_and_entry(parent, "Max. sequence length:", "30", 6, 0)
+        self.max_peptide_length_entry = self.entry
+
+        self.label_and_entry(parent, "Min. products:", "2", 7, 0)
+        self.min_matched_products_entry = self.entry
+
+        self.label_and_entry(parent, "Min. consecutive products:", "1", 8, 0)
+        self.min_consec_matched_products_entry = self.entry
+
+        self.label_and_entry(parent, "Min. sum intensity for products:", "472", 9, 0)
+        self.min_matched_products_inten_entry = self.entry
+
+        self.label_and_entry(parent, "Min. score:", "6.62", 10, 0)
+        self.min_peptide_score_entry = self.entry
+
+        self.label_and_entry(parent, "Min. MH+ error (ppm):", "-5", 11, 0)
+        self.min_delta_mhp_ppm_entry = self.entry
+
+        self.label_and_entry(parent, "Max. MH+ error (ppm):", "5", 12, 0)
+        self.max_delta_mhp_ppm_entry = self.entry
+
+        self.label_and_entry(parent, "Retention time RSD:", "4", 13, 0)
+        self.std_deviation_entry = self.entry
+
+    def label_and_entry(self, parent, label_text, default_value, row, column):
+        label = tk.Label(parent, text=label_text)
+        label.grid(row=row, column=column, padx=10, pady=5, sticky='e')
+        self.entry = tk.Entry(parent, width=15)
+        self.entry.insert(0, default_value)
+        self.entry.grid(row=row, column=column + 1, padx=10, pady=5, sticky='w')
+
+    def get_int_value(self, value_str):
+        value_str = value_str.strip()
+        return int(value_str) if value_str and int(value_str) != 0 else None
+
+    def get_float_value(self, value_str):
+        value_str = value_str.strip()
+        return float(value_str) if value_str and float(value_str) != 0 else None
+
+    def browse_folder(self):
+        folder_selected = filedialog.askdirectory()
+        if folder_selected:
+            self.input_folder = folder_selected
+            self.input_entry.delete(0, tk.END)
+            self.input_entry.insert(0, self.input_folder)
+            # exclude proteins checkbox
+            self.exclude_proteins_checkbox.config(state=tk.NORMAL)
+            # Open separation time selection window
+            self.open_separation_time_selection_window()
+
+    def open_separation_time_selection_window(self):
+        # Scan subfolders for IA_final_peptide 
+        separation_times = set()
+
+        # Get subfolders
+        subfolders = [os.path.join(self.input_folder, o) for o in os.listdir(self.input_folder)
+                      if os.path.isdir(os.path.join(self.input_folder, o))]
+
         
-        messagebox.showinfo("Success", "Raw data processed successfully.")
+        if not subfolders:
+            subfolders = [self.input_folder]
+
         
-    def generate_graphs(self):
-        """ Perform clustering into lines, replacing scikit-learn LinearRegression with np.polyfit. """
-        try:
-            n = int(self.trendline_number_var.get())
-            if n < 4:
-                raise ValueError
-            self.num_clusters = n - 1
-        except ValueError:
-            messagebox.showerror("Error", "Trendline numbers must be an integer >= 4.")
-            return
-        
-        processed_folder = self.processed_folder_entry.get()
-        if not processed_folder or not os.path.isdir(processed_folder):
-            messagebox.showerror("Error", "Please select a valid Processed Data Folder.")
-            return
-        
-        graphs_folder = self.graphs_folder_entry.get()
-        if not graphs_folder or not os.path.isdir(graphs_folder):
-            messagebox.showerror("Error", "Please select a valid Graph Output Folder.")
-            return
-        
-        try:
-            x_limit = float(self.x_axis_var.get())
-            y_limit = float(self.y_axis_var.get())
-        except ValueError:
-            messagebox.showerror("Error", "Axis size fields must contain valid numbers.")
-            return
-        
-        if self.colour_option_var.get() == "Randomize graph colour":
-            base_colors = ["red", "green", "blue", "orange", "purple", "cyan", "magenta", "black", "gold", "olive", "teal", "navy"]
-            if len(os.listdir(processed_folder)) <= len(base_colors):
-                unique_random_colors = random.sample(base_colors, len(os.listdir(processed_folder)))
-            else:
-                unique_random_colors = random.sample(base_colors, len(base_colors))
-                while len(unique_random_colors) < len(os.listdir(processed_folder)):
-                    new_color = "#%06x" % random.randint(0, 0xFFFFFF)
-                    if new_color not in unique_random_colors:
-                        unique_random_colors.append(new_color)
-        
-        
-        cmap = plt.colormaps["tab10"]
-        
-        sample_folders = [
-            os.path.join(processed_folder, d)
-            for d in os.listdir(processed_folder)
-            if os.path.isdir(os.path.join(processed_folder, d)) and d.endswith("_output")
-        ]
-        if not sample_folders:
-            messagebox.showerror("Error", "No processed sample folders found in the Processed Data Folder.")
-            return
-        
-        for idx, sample_folder in enumerate(sample_folders):
-            folder_name = os.path.basename(sample_folder)
-            raw_basename = folder_name[:-7] if folder_name.endswith("_output") else folder_name
-            
-            # Look for Apex3DIons
-            ions_file = None
-            for f in os.listdir(sample_folder):
-                if "Apex3DIons" in f:
-                    ions_file = os.path.join(sample_folder, f)
-                    break
-            if not ions_file or not os.path.isfile(ions_file):
-                print(f"Ions file not found for {raw_basename}, skipping graph.")
-                continue
-            
-            data = pd.read_csv(ions_file)
-            if not {'mobility', 'mobilityFWHM', 'inten'}.issubset(data.columns):
-                print(f"Required columns not found in sample {raw_basename}, skipping graph.")
-                continue
-            
-            # Take top 2000 points by intensity
-            data_top = data.nlargest(min(2000, len(data)), 'inten')
-            X = data_top['mobility'].values.reshape(-1, 1)
-            y = data_top['mobilityFWHM'].values
-            
-            # K-means style multi-line clustering
-            np.random.seed(42)
-            cluster_assignments = np.random.randint(0, self.num_clusters, len(X))
-            
-            max_iter = 100
-            for iteration in range(max_iter):
-                # Fit line in each cluster with np.polyfit
-                lines = []  # list of (slope, intercept)
-                for k in range(self.num_clusters):
-                    indices = np.where(cluster_assignments == k)[0]
-                    if len(indices) > 0:
-                        # X[indices] is shape (N,1), flatten for polyfit
-                        slope, intercept = np.polyfit(X[indices].ravel(), y[indices], 1)
-                    else:
-                        # If cluster is empty, set line to something invalid
-                        slope, intercept = (0, 9999999)
-                    lines.append((slope, intercept))
-                
-                # error
-                errors = np.zeros((len(X), self.num_clusters))
-                for k in range(self.num_clusters):
-                    slope_k, intercept_k = lines[k]
-                    # predicted y = slope * x + intercept
-                    predicted = slope_k * X.ravel() + intercept_k
-                    errors[:, k] = np.abs(predicted - y)
-                
-                new_assignments = np.argmin(errors, axis=1)
-                
-                if np.array_equal(cluster_assignments, new_assignments):
-                    break
-                cluster_assignments = new_assignments
-            
-            
-            X_fit = np.linspace(0, x_limit, 100)
-            
-            fig, ax = plt.subplots(figsize=(10, 6))
-            
-            # lines for final iteration
-            lines_final = []
-            for k in range(self.num_clusters):
-                indices = np.where(cluster_assignments == k)[0]
-                if len(indices) > 0:
-                    slope, intercept = np.polyfit(X[indices].ravel(), y[indices], 1)
-                    lines_final.append((slope, intercept))
-                else:
-                    lines_final.append((0, 9999999))
-            
-            # Plot clusters
-            for k, (slope_k, intercept_k) in enumerate(lines_final):
-                indices = np.where(cluster_assignments == k)[0]
-                if len(indices) > 0:
-                    # color
-                    if self.colour_option_var.get() == "Colour by cluster":
-                        cluster_colors = [cmap(i / self.num_clusters) for i in range(self.num_clusters)]
-                        color = cluster_colors[k]
-                    elif self.colour_option_var.get() == "Randomize graph colour":
-                        color = self._make_valid_color(unique_random_colors[idx])
-                    elif self.colour_option_var.get() == "Custom color":
-                        color = self._make_valid_color(self.custom_color_var.get())
-                    else:
-                        color = "black"
-                    # scatter
-                    ax.scatter(X[indices], y[indices], color=color, s=10)
-                    
-                    # trendline
-                    if self.display_trendlines_var.get():
-                        y_fit = slope_k * X_fit + intercept_k
-                        ax.plot(X_fit, y_fit, color="black")  # always black for lines
-            
-            ax.set_xlabel("Mobility", fontsize=14)
-            ax.set_ylabel("Mobility FWHM", fontsize=14)
-            ax.grid(True)
-            ax.set_xlim(0, x_limit)
-            ax.set_ylim(0, y_limit)
-            
-            fig.text(
-                0.5, 0.01,
-                f"{raw_basename} | Initial Trendline: {self.initial_trendline_var.get()}",
-                ha='center', fontsize=8, color='black'
-            )
-            
-            graph_path = os.path.join(graphs_folder, f"{raw_basename}_trendlines.png")
-            plt.savefig(graph_path, transparent=True)
-            plt.close(fig)
-            
-            # Save final line ranges if requested
-            if self.display_trendlines_var.get() and self.save_trendlines_var.get():
-                trendline_strings = []
-                for slope_k, intercept_k in lines_final:
-                    # predict at 0, at x_limit
-                    start_val = slope_k * 0 + intercept_k
-                    end_val = slope_k * x_limit + intercept_k
-                    # skip if intercept was 9999999 to cluster empty
-                    if abs(intercept_k) < 1e8:
-                        trendline_strings.append(f"{round(start_val,1)}-{round(end_val,1)}")
-                
-                trendline_text = ", ".join(trendline_strings)
-                trend_file_path = os.path.join(graphs_folder, f"{raw_basename}_trendlines.txt")
-                with open(trend_file_path, "w") as f:
-                    f.write(trendline_text)
-            
-        messagebox.showinfo("Success", f"Graphs generated successfully in:\n{graphs_folder}")
-        
-    def modify_resolution_in_folder(self, folder_path, new_resolution):
-        for root, dirs, files in os.walk(folder_path):
-            for file in files:
-                if file.endswith("_extern.inf"):
-                    file_path = os.path.join(root, file)
-                    with open(file_path, 'r') as f:
-                        lines = f.readlines()
-                    modified_lines = []
-                    for line in lines:
-                        if line.startswith("Resolution"):
-                            modified_lines.append(f"Resolution\t\t\t{new_resolution:.2f}\n")
+        self.separation_time_files = {}
+
+        for subfolder in subfolders:
+            subfolder_name = os.path.basename(subfolder)
+            # Find IA_final_peptide files
+            for root, dirs, files in os.walk(subfolder):
+                for file in files:
+                    if file.endswith('IA_final_peptide.csv'):
+                        file_path = os.path.join(root, file)
+                        # Extract separation time from filenam
+                        filename = os.path.basename(file_path)
+                        parts = filename.split('_')
+                        file_sep_time = None
+                        for part in parts:
+                            if part.endswith('ms'):
+                                file_sep_time = part
+                                break
+                        if file_sep_time:
+                            separation_times.add(file_sep_time)
                         else:
-                            modified_lines.append(line)
-                    with open(file_path, 'w') as f:
-                        f.writelines(modified_lines)
+                            
+                            if '1_1' in root or '1_1' in subfolder:
+                                separation_times.add('single-pass')
+                                file_sep_time = 'single-pass'
+                            else:
+                                # No separation time, and not in '1_1', bring a warning
+                                messagebox.showwarning("Attention", "No IM-MS separation times found in file name.")
+                                return  
+                       
+                        if file_sep_time not in self.separation_time_files:
+                            self.separation_time_files[file_sep_time] = {}
+                        if subfolder_name not in self.separation_time_files[file_sep_time]:
+                            self.separation_time_files[file_sep_time][subfolder_name] = []
+                        self.separation_time_files[file_sep_time][subfolder_name].append(file_path)
 
-    def _make_valid_color(self, color_str):
-        return color_str.replace(" ", "")
+        if not separation_times:
+            messagebox.showinfo("Info", "No separation times found.")
+            return
+
+        # selection window
+        self.separation_window = tk.Toplevel(self.master)
+        self.separation_window.title("Select IM-MS Separation Time")
+
+        # Label
+        label = tk.Label(self.separation_window, text="Select for which IM-MS separation you want to find the best trendline in your data:")
+        label.pack()
+
+        # checkboxes for each separation time
+        self.check_vars.clear()  
+        for sep_time in sorted(separation_times):
+            var = tk.IntVar(value=0)  
+            cb = tk.Checkbutton(self.separation_window, text=sep_time, variable=var,
+                                command=lambda v=var: self.on_checkbox_selected(v))
+            cb.pack(anchor='w')
+            self.check_vars[sep_time] = var
+
+        # OK button to confirm
+        ok_button = tk.Button(self.separation_window, text="OK", command=self.on_separation_time_selection_ok)
+        ok_button.pack()
+
+    def on_checkbox_selected(self, selected_var):
+        # Disable all checkboxes
+        for var in self.check_vars.values():
+            if var != selected_var:
+                var.set(0)
+
+    def on_separation_time_selection_ok(self):
+        selected_time = None
+        for sep_time, var in self.check_vars.items():
+            if var.get() == 1:
+                selected_time = sep_time
+                break
+
+        if not selected_time:
+            messagebox.showwarning("Warning", "Please select a separation time.")
+            return
+
+        self.separation_time = selected_time
+        self.separation_time_set = True
+        # Updatelabel
+        self.separation_time_label.config(
+            text=f"IM-MS separation time chosen for analysis: {self.separation_time}",
+            fg='green'
+        )
         
-if __name__ == "__main__":
+        self.separation_window.destroy()
+
+    def exclude_proteins_checked(self):
+        if self.exclude_proteins_var.get():
+            
+            self.proteins_to_exclude_set = False
+            self.open_protein_selection_window()
+        else:
+            
+            self.proteins_to_exclude = []
+            self.proteins_to_exclude_set = False
+            
+            self.exclude_proteins_label.config(fg='black')
+
+    def open_protein_selection_window(self):
+        # Read all 'protein.Entry' values from IA_final_peptide.csv files
+
+        # Get subfolders
+        subfolders = [os.path.join(self.input_folder, o) for o in os.listdir(self.input_folder)
+                      if os.path.isdir(os.path.join(self.input_folder, o))]
+
+      
+        if not subfolders:
+            subfolders = [self.input_folder]
+
+        protein_entries = set()
+
+        for subfolder in subfolders:
+            # Find and process all IA_final_peptide.csv files in subfolder
+            ia_files = []
+            for root, dirs, files in os.walk(subfolder):
+                for file in files:
+                    if file.endswith('IA_final_peptide.csv'):
+                        ia_files.append(os.path.join(root, file))
+
+            for file_path in ia_files:
+                try:
+                    df = pd.read_csv(file_path, encoding='latin1')
+                    if 'protein.Entry' in df.columns:
+                        protein_entries.update(df['protein.Entry'].dropna().unique())
+                except Exception as e:
+                    messagebox.showerror("Error", f"Error processing {file_path}: {e}")
+
+        if not protein_entries:
+            messagebox.showinfo("Info", "No proteins found to exclude.")
+            return
+
+        # new window
+        self.protein_window = tk.Toplevel(self.master)
+        self.protein_window.title("Exclude Proteins")
+
+        # Label
+        label = tk.Label(self.protein_window, text="These proteins were found in the input folders:")
+        label.pack()
+
+        
+        canvas = tk.Canvas(self.protein_window)
+        scrollbar = tk.Scrollbar(self.protein_window, orient="vertical", command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(
+                scrollregion=canvas.bbox("all")
+            )
+        )
+
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        # For each protein entry, createcheckbox
+        self.protein_vars = {}
+        for protein in sorted(protein_entries):
+            var = tk.IntVar(value=1)  # Checked by default
+            chk = tk.Checkbutton(scrollable_frame, text=protein, variable=var)
+            chk.pack(anchor='w')
+            self.protein_vars[protein] = var
+
+      
+        ok_button = tk.Button(self.protein_window, text="OK", command=self.on_protein_selection_ok)
+        ok_button.pack()
+
+    def on_protein_selection_ok(self):
+        # Collect proteins to exclude
+        self.proteins_to_exclude = [protein for protein, var in self.protein_vars.items() if var.get() == 0]
+        self.proteins_to_exclude_set = True
+
+       
+        if self.proteins_to_exclude:
+            self.exclude_proteins_label.config(fg='green')
+        else:
+            self.exclude_proteins_label.config(fg='black')
+
+        
+        self.protein_window.destroy()
+
+    def process_trendlines(self):
+        self.input_folder = self.input_entry.get()
+        if not os.path.isdir(self.input_folder):
+            messagebox.showerror("Error", "Invalid input folder selected.")
+            return
+
+        
+        if self.exclude_proteins_var.get():
+            if not self.proteins_to_exclude_set:
+                self.open_protein_selection_window()
+                self.master.wait_window(self.protein_window)
+
+        
+        if not self.separation_time_set:
+            messagebox.showwarning("Warning", "Please select an IM-MS separation time for analysis.")
+            return
+
+        # filtering parameters
+        sample_replicate_threshold = self.get_int_value(self.sample_replicate_threshold_entry.get())
+        min_product_aa = self.get_float_value(self.min_product_aa_entry.get())
+        precursor_inten = self.get_float_value(self.precursor_inten_entry.get())
+        min_peptide_length = self.get_float_value(self.min_peptide_length_entry.get())
+        max_peptide_length = self.get_float_value(self.max_peptide_length_entry.get())
+        min_matched_products = self.get_float_value(self.min_matched_products_entry.get())
+        min_consec_matched_products = self.get_float_value(self.min_consec_matched_products_entry.get())
+        min_matched_products_inten = self.get_float_value(self.min_matched_products_inten_entry.get())
+        min_peptide_score = self.get_float_value(self.min_peptide_score_entry.get())
+        min_delta_mhp_ppm = self.get_float_value(self.min_delta_mhp_ppm_entry.get())
+        max_delta_mhp_ppm = self.get_float_value(self.max_delta_mhp_ppm_entry.get())
+        retention_time_rsd = self.get_float_value(self.std_deviation_entry.get())
+
+        # Clear output area
+        self.output_text.delete(1.0, tk.END)
+
+        if self.separation_time not in self.separation_time_files:
+            messagebox.showerror("Error", f"No files found for separation time {self.separation_time}.")
+            return
+
+        counts_per_subfolder = {}
+        max_unique_peptides = 0
+        best_subfolder = None
+        best_df = None
+
+        for subfolder_name in self.separation_time_files[self.separation_time]:
+            ia_files = self.separation_time_files[self.separation_time][subfolder_name]
+            self.output_text.insert(tk.END, f"\nProcessing trendline: {subfolder_name}\n")
+            merged_df = pd.DataFrame()
+            for file_path in ia_files:
+                self.output_text.insert(tk.END, f"Processing file: {file_path}\n")
+                try:
+                    df = pd.read_csv(file_path, encoding='latin1')
+                    merged_df = pd.concat([merged_df, df], ignore_index=True)
+                except Exception as e:
+                    self.output_text.insert(tk.END, f"Error processing {file_path}: {e}\n")
+
+            # Ensure 'peptide.score' is numeric, converting non-numeric to NaN
+            merged_df['peptide.score'] = pd.to_numeric(merged_df['peptide.score'], errors='coerce')
+
+            # Report counts before filtering
+            total_peptides = merged_df.shape[0]
+            total_unique_peptides = merged_df['peptide.seq'].nunique()
+            self.output_text.insert(
+                tk.END,
+                f"Total peptides before any filtering: {total_peptides} ({total_unique_peptides} unique)\n"
+            )
+
+            # Count peptides with score <= 0
+            num_non_positive_scores = (merged_df['peptide.score'] <= 0).sum()
+            self.output_text.insert(tk.END, f"Number of peptides with score <= 0: {num_non_positive_scores}\n")
+
+            # Remove peptides with peptide.score <= 0 or NaN
+            merged_df = merged_df[merged_df['peptide.score'].notna() & (merged_df['peptide.score'] > 0)]
+
+            # Report counts after removing peptides with score <= 0
+            after_score_filter_total_peptides = merged_df.shape[0]
+            after_score_filter_unique_peptides = merged_df['peptide.seq'].nunique()
+            self.output_text.insert(
+                tk.END,
+                f"Total peptides after removing peptides with score <= 0: {after_score_filter_total_peptides} ({after_score_filter_unique_peptides} unique)\n"
+            )
+
+            if merged_df.empty:
+                self.output_text.insert(tk.END, "No data to process in this trendline.\n")
+                counts_per_subfolder[subfolder_name] = 0
+                continue
+
+            # Exclude proteins if any
+            if self.proteins_to_exclude:
+                initial_count = merged_df.shape[0]
+                merged_df = merged_df[~merged_df['protein.Entry'].isin(self.proteins_to_exclude)]
+                excluded_count = initial_count - merged_df.shape[0]
+                self.output_text.insert(tk.END, f"Excluded {excluded_count} peptides based on protein exclusion.\n")
+
+                if merged_df.empty:
+                    self.output_text.insert(tk.END, "No data left after protein exclusion.\n")
+                    counts_per_subfolder[subfolder_name] = 0
+                    continue
+
+            # 2: Averaging out numerical columns
+            numeric_columns = [
+                'peptide.MatchedProducts',
+                'peptide.seqLength',
+                'precursor.inten',
+                'peptide.score',
+                'peptide.MatchedProductsSumInten',
+                'peptidePrecursor.deltaMhpPPM',
+                'peptide.ConsectiveMatchedProducts'
+            ]
+            for col in numeric_columns:
+                if col in merged_df.columns:
+                    merged_df[f'avg_{col}'] = merged_df.groupby('peptide.seq')[col].transform('mean')
+
+            self.output_text.insert(tk.END, f"Averaged out numerical values added.\n")
+
+            # 3: Apply file threshold (sample replicate threshold)
+            if sample_replicate_threshold is not None:
+                peptide_counts = merged_df.groupby('peptide.seq')['peptide.seq'].transform('count')
+                merged_df = merged_df[peptide_counts >= sample_replicate_threshold]
+                self.output_text.insert(
+                    tk.END,
+                    f"Peptides after file threshold: {merged_df.shape[0]} ({merged_df['peptide.seq'].nunique()} unique)\n"
+                )
+            else:
+                self.output_text.insert(tk.END, "Skipping file threshold (sample replicate threshold not set).\n")
+
+            # 4: Apply retention time RSD (if file threshold is 3 or more)
+            if sample_replicate_threshold is not None and sample_replicate_threshold >= 3 and retention_time_rsd is not None:
+                grouped_df = merged_df.groupby('peptide.seq')
+
+                for group_name, group_df in grouped_df:
+                    average = group_df['precursor.retT'].mean()
+                    deviations = (group_df['precursor.retT'] - average) ** 2
+                    sum_squared_results = deviations.sum()
+                    num_datapoints = group_df.shape[0]
+
+                    if num_datapoints > 0:
+                        # Population standard deviation 
+                        squared_results_minus_datapoints = sum_squared_results / num_datapoints
+                        standard_deviation = squared_results_minus_datapoints ** 0.5
+                        relative_standard_deviation = (standard_deviation * 100) / average
+
+                        # Truncate to one decimal place 
+                        relative_standard_deviation = int(relative_standard_deviation * 10) / 10.0
+
+                        
+                        merged_df.loc[group_df.index, 'relative SD'] = relative_standard_deviation
+
+                # retention time RSD threshold
+                merged_df = merged_df[merged_df['relative SD'] <= retention_time_rsd]
+                self.output_text.insert(
+                    tk.END,
+                    f"Peptides after retention time RSD threshold: {merged_df.shape[0]} ({merged_df['peptide.seq'].nunique()} unique)\n"
+                )
+            else:
+                self.output_text.insert(
+                    tk.END,
+                    "Skipping retention time RSD calculation as file threshold is not set or < 3.\n"
+                )
+
+            # 5: Apply other filters
+            if min_peptide_score is not None:
+                merged_df = merged_df[merged_df['avg_peptide.score'] >= min_peptide_score]
+                self.output_text.insert(
+                    tk.END,
+                    f"Peptides after score filter: {merged_df.shape[0]} ({merged_df['peptide.seq'].nunique()} unique)\n"
+                )
+            else:
+                self.output_text.insert(tk.END, "Skipping score filter (parameter not set).\n")
+
+            if min_product_aa is not None:
+                # Apply truncation logic 
+                rounded_products = merged_df['avg_peptide.MatchedProducts'].round()
+                truncated_product_aa = (rounded_products / merged_df['avg_peptide.seqLength']).apply(
+                    lambda x: int(x * 100) / 100.0
+                )
+                merged_df = merged_df[truncated_product_aa >= min_product_aa]
+                self.output_text.insert(
+                    tk.END,
+                    f"Peptides after products per amino acid filter: {merged_df.shape[0]} ({merged_df['peptide.seq'].nunique()} unique)\n"
+                )
+            else:
+                self.output_text.insert(tk.END, "Skipping products per amino acid filter (parameter not set).\n")
+
+            if precursor_inten is not None:
+                merged_df = merged_df[merged_df['avg_precursor.inten'] >= precursor_inten]
+                self.output_text.insert(
+                    tk.END,
+                    f"Peptides after intensity filter: {merged_df.shape[0]} ({merged_df['peptide.seq'].nunique()} unique)\n"
+                )
+            else:
+                self.output_text.insert(tk.END, "Skipping intensity filter (parameter not set).\n")
+
+            if min_peptide_length is not None or max_peptide_length is not None:
+                if min_peptide_length is not None and max_peptide_length is not None:
+                    merged_df = merged_df[
+                        (merged_df['avg_peptide.seqLength'] >= min_peptide_length) &
+                        (merged_df['avg_peptide.seqLength'] <= max_peptide_length)
+                    ]
+                elif min_peptide_length is not None:
+                    merged_df = merged_df[merged_df['avg_peptide.seqLength'] >= min_peptide_length]
+                elif max_peptide_length is not None:
+                    merged_df = merged_df[merged_df['avg_peptide.seqLength'] <= max_peptide_length]
+                self.output_text.insert(
+                    tk.END,
+                    f"Peptides after sequence length filter: {merged_df.shape[0]} ({merged_df['peptide.seq'].nunique()} unique)\n"
+                )
+            else:
+                self.output_text.insert(tk.END, "Skipping sequence length filter (parameters not set).\n")
+
+            # minimum matched products filter 
+            if min_matched_products is not None:
+                
+                rounded_matched_products = merged_df['avg_peptide.MatchedProducts'].round()
+                merged_df = merged_df[rounded_matched_products >= min_matched_products]
+                self.output_text.insert(
+                    tk.END,
+                    f"Peptides after matched products filter: {merged_df.shape[0]} ({merged_df['peptide.seq'].nunique()} unique)\n"
+                )
+            else:
+                self.output_text.insert(tk.END, "Skipping matched products filter (parameter not set).\n")
+
+          
+            if min_consec_matched_products is not None:
+            
+                rounded_consec_products = merged_df['avg_peptide.ConsectiveMatchedProducts'].round()
+                merged_df = merged_df[rounded_consec_products >= min_consec_matched_products]
+                self.output_text.insert(
+                    tk.END,
+                    f"Peptides after consecutive products filter: {merged_df.shape[0]} ({merged_df['peptide.seq'].nunique()} unique)\n"
+                )
+            else:
+                self.output_text.insert(tk.END, "Skipping consecutive products filter (parameter not set).\n")
+
+            if min_matched_products_inten is not None:
+                merged_df = merged_df[merged_df['avg_peptide.MatchedProductsSumInten'] >= min_matched_products_inten]
+                self.output_text.insert(
+                    tk.END,
+                    f"Peptides after sum intensity for products filter: {merged_df.shape[0]} ({merged_df['peptide.seq'].nunique()} unique)\n"
+                )
+            else:
+                self.output_text.insert(tk.END, "Skipping sum intensity for products filter (parameter not set).\n")
+
+            if min_delta_mhp_ppm is not None or max_delta_mhp_ppm is not None:
+                if min_delta_mhp_ppm is not None and max_delta_mhp_ppm is not None:
+                    merged_df = merged_df[
+                        (merged_df['avg_peptidePrecursor.deltaMhpPPM'] >= min_delta_mhp_ppm) &
+                        (merged_df['avg_peptidePrecursor.deltaMhpPPM'] <= max_delta_mhp_ppm)
+                    ]
+                elif min_delta_mhp_ppm is not None:
+                    merged_df = merged_df[merged_df['avg_peptidePrecursor.deltaMhpPPM'] >= min_delta_mhp_ppm]
+                elif max_delta_mhp_ppm is not None:
+                    merged_df = merged_df[merged_df['avg_peptidePrecursor.deltaMhpPPM'] <= max_delta_mhp_ppm]
+                self.output_text.insert(
+                    tk.END,
+                    f"Peptides after mass error filter: {merged_df.shape[0]} ({merged_df['peptide.seq'].nunique()} unique)\n"
+                )
+            else:
+                self.output_text.insert(tk.END, "Skipping mass error filter (parameters not set).\n")
+
+            # 6: Remove extra averaged-out columns
+            merged_df = merged_df.drop(
+                columns=[f'avg_{col}' for col in numeric_columns if f'avg_{col}' in merged_df.columns],
+                errors='ignore'
+            )
+
+            # 7: Sort by peptide.score and remove duplicates based on peptide.seq
+            merged_df = merged_df.sort_values(by='peptide.score', ascending=False)
+            merged_df = merged_df.drop_duplicates(subset='peptide.seq', keep='first')
+
+            final_unique_peptides = merged_df['peptide.seq'].nunique()
+            self.output_text.insert(
+                tk.END,
+                f"Final peptides after sorting and deduplication: {merged_df.shape[0]} ({final_unique_peptides} unique)\n"
+            )
+
+            counts_per_subfolder[subfolder_name] = final_unique_peptides
+
+            if final_unique_peptides > max_unique_peptides:
+                max_unique_peptides = final_unique_peptides
+                best_subfolder = subfolder_name
+                best_df = merged_df
+
+            self.output_text.insert(tk.END, f"Completed processing trendline: {subfolder_name}\n")
+
+        # summarize results
+        self.output_text.insert(tk.END, "\nFinal results:\n")
+
+        
+        def sort_key(subfolder_name):
+            parts = subfolder_name.split('_')
+            numeric_parts = []
+            for part in parts:
+                
+                stripped_part = part.lstrip('0') or '0'
+                if stripped_part.isdigit():
+                    numeric_parts.append(int(stripped_part))
+                else:
+                    numeric_parts.append(part)
+            return numeric_parts
+
+        for subfolder_name in sorted(counts_per_subfolder.keys(), key=sort_key):
+            count = counts_per_subfolder[subfolder_name]
+            self.output_text.insert(tk.END, f"{subfolder_name}: {count} unique peptides\n")
+
+        # Update the header label
+        if best_subfolder:
+            self.header_label.config(
+                text=f"The best performing trendline is {best_subfolder} with {max_unique_peptides} unique peptides"
+            )
+        else:
+            self.header_label.config(text="No valid data found in any trendline.")
+
+        # Save the best_df to a file
+        if best_df is not None:
+            parent_directory = os.path.dirname(self.input_folder)
+            output_folder = os.path.join(parent_directory, "processed_results")
+            os.makedirs(output_folder, exist_ok=True)
+
+            # Generate filename with timestamp and best trendline name'IA_final_peptide.csv'
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_filename = f"{best_subfolder}_{timestamp}_IA_final_peptide.csv"
+            output_path = os.path.join(output_folder, output_filename)
+
+            # Save the best_df to the output_path
+            best_df.to_csv(output_path, index=False)
+            self.output_text.insert(tk.END, f"\nFinal result saved to: {output_path}\n")
+        else:
+            self.output_text.insert(tk.END, "No data to save.\n")
+
+
+def main():
     root = tk.Tk()
-    app = TrendlineApp(root)
+    app = TrendlineAnalyzerApp(root)
     root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
