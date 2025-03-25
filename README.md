@@ -3,28 +3,24 @@ Process, filter and merge cyclic ion mobility mass spectrometry one- and multi-p
 
 __*Want to download the executable and learn how to use MultiPassMerger?*__
 
---> Please see the quick start tutorial on our website: https://politislab.uk/software/
-
-__*Want to know more about MultiPassMerger code logic?*__
-
---> Please see the detailed description on our website: https://politislab.uk/software/
+--> Please see the quick start tutorial on our website: https://politislab.uk/multipassmerger/
 
 
 __*Dependancies:*__
 
-- ProteinLynx Global Sever (Waters)
+- ProteinLynx Global Sever (Waters) to process the data
 
-- SELECT SERIES cyclic IM-MS (Waters)
+- SELECT SERIES cyclic IM-MS mass spectrometer (Waters) to aquire data
 
 __*Optional:*__
 
-- DynamX (Waters) 
+- DynamX (Waters) OR HDExaminer (LEAP) to manually check the output data
 
 __*Important:*__
 
-- Include the IM-MS seperation time in your sample name; e.g. "PhosB_18ms_23042024" (where 18ms is the seperation time)
-
 - Ensure ProteinLynx Global Server is saved in your C drive: "C:\PLGS3.0.3" (HINT: if you have a different version of PLGS you can just re-name it to 3.0.3 and it will still work!)
 
-- One pass data will always be stored in a folder called "1_1"; multipass data is stored in folders according to the user-defined trendlines chosen 
+-Use Windows 10 or above 
+
+-Store all data on your local drive and not a cloud 
 
