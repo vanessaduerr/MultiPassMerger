@@ -1,0 +1,515 @@
+# -*- coding: latin-1 -*-
+import tkinter as tk
+from tkinter import filedialog, messagebox
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+import os
+from datetime import datetime
+import subprocess
+import random
+
+class TrendlineApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Trendline Finder and Graph Tool")
+        self.root.geometry("700x500")  
+
+        # canvas
+        self.canvas = tk.Canvas(root)
+        self.vsb = tk.Scrollbar(root, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=self.vsb.set)
+        self.vsb.pack(side="right", fill="y")
+        self.canvas.pack(side="left", fill="both", expand=True)
+        
+        # frame
+        self.main_frame = tk.Frame(self.canvas)
+        self.canvas.create_window((0, 0), window=self.main_frame, anchor="nw")
+        self.main_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        
+        # algorithm selection
+        self.frame_algorithm = tk.LabelFrame(self.main_frame, text="Ion search algorithm to be used", padx=10, pady=10)
+        self.frame_algorithm.pack(fill="x", padx=10, pady=10)
+        self.apex_mode_var = tk.StringVar(value="Apex3D")
+        tk.Radiobutton(self.frame_algorithm, text="Apex3D (original PLGS)", variable=self.apex_mode_var, value="Apex3D").pack(side="left", padx=5, pady=5)
+        tk.Radiobutton(self.frame_algorithm, text="ApexRT", variable=self.apex_mode_var, value="ApexRT").pack(side="left", padx=5, pady=5)
+
+        # Variables for .raw processing
+        self.raw_folder = ""
+        self.output_folder = ""
+        self.processed_data_folder = ""  
+
+        # Variables for raw processing parameters
+        self.le_threshold_var = tk.StringVar(value="300")
+        self.he_threshold_var = tk.StringVar(value="150")
+        self.ret_start_var = tk.StringVar(value="1.0")
+        self.ret_end_var = tk.StringVar(value="10")
+        self.initial_trendline_var = tk.StringVar(value="11-13")
+        self.lockmass_z1_var = tk.StringVar(value="556.2771")
+        self.lockmass_z2_var = tk.StringVar(value="")
+        self.modify_resolution_var = tk.BooleanVar(value=True)
+        
+        # Graph generation parameters
+        self.colour_option_var = tk.StringVar(value="Colour by trendline cluster")
+        self.display_trendlines_var = tk.BooleanVar(value=True)
+        self.x_axis_var = tk.StringVar(value="200")
+        self.y_axis_var = tk.StringVar(value="40")
+        self.trendline_number_var = tk.StringVar(value="5")  # Moved to graph section
+        self.save_trendlines_var = tk.BooleanVar(value=True)
+        self.custom_color_var = tk.StringVar(value="black")
+        
+        
+        self.frame_process = tk.LabelFrame(self.main_frame, text="Raw Data Processing", padx=10, pady=10)
+        self.frame_process.pack(fill="x", padx=10, pady=10)
+        self.create_process_inputs(self.frame_process)
+        
+        self.frame_graph = tk.LabelFrame(self.main_frame, text="Graph Generation", padx=10, pady=10)
+        self.frame_graph.pack(fill="x", padx=10, pady=10)
+        self.create_graph_inputs(self.frame_graph)
+        
+    def create_process_inputs(self, parent):
+        row = 0
+        tk.Label(parent, text="Raw Data Folder:").grid(row=row, column=0, sticky='e', padx=5, pady=5)
+        self.raw_folder_entry = tk.Entry(parent, width=50)
+        self.raw_folder_entry.grid(row=row, column=1, padx=5, pady=5)
+        tk.Button(parent, text="Browse", command=self.browse_raw_folder).grid(row=row, column=2, padx=5, pady=5)
+        row += 1
+        
+        tk.Label(parent, text="Output Folder (for Processed Data):").grid(row=row, column=0, sticky='e', padx=5, pady=5)
+        self.output_folder_entry = tk.Entry(parent, width=50)
+        self.output_folder_entry.grid(row=row, column=1, padx=5, pady=5)
+        tk.Button(parent, text="Browse", command=self.browse_output_folder).grid(row=row, column=2, padx=5, pady=5)
+        row += 1
+        
+        # processing parameters
+        tk.Label(parent, text="Low Energy Threshold:").grid(row=row, column=0, sticky='e', padx=5, pady=5)
+        tk.Entry(parent, textvariable=self.le_threshold_var, width=10).grid(row=row, column=1, sticky='w', padx=5, pady=5)
+        row += 1
+        tk.Label(parent, text="High Energy Threshold:").grid(row=row, column=0, sticky='e', padx=5, pady=5)
+        tk.Entry(parent, textvariable=self.he_threshold_var, width=10).grid(row=row, column=1, sticky='w', padx=5, pady=5)
+        row += 1
+        tk.Label(parent, text="Retention Start Time (min):").grid(row=row, column=0, sticky='e', padx=5, pady=5)
+        tk.Entry(parent, textvariable=self.ret_start_var, width=10).grid(row=row, column=1, sticky='w', padx=5, pady=5)
+        row += 1
+        tk.Label(parent, text="Retention End Time (min):").grid(row=row, column=0, sticky='e', padx=5, pady=5)
+        tk.Entry(parent, textvariable=self.ret_end_var, width=10).grid(row=row, column=1, sticky='w', padx=5, pady=5)
+        row += 1
+        tk.Label(parent, text="Initial Trendline (e.g., 11-13):").grid(row=row, column=0, sticky='e', padx=5, pady=5)
+        tk.Entry(parent, textvariable=self.initial_trendline_var, width=15).grid(row=row, column=1, sticky='w', padx=5, pady=5)
+        row += 1
+        tk.Label(parent, text="LockMass Z1:").grid(row=row, column=0, sticky='e', padx=5, pady=5)
+        tk.Entry(parent, textvariable=self.lockmass_z1_var, width=15).grid(row=row, column=1, sticky='w', padx=5, pady=5)
+        row += 1
+        tk.Label(parent, text="LockMass Z2:").grid(row=row, column=0, sticky='e', padx=5, pady=5)
+        tk.Entry(parent, textvariable=self.lockmass_z2_var, width=15).grid(row=row, column=1, sticky='w', padx=5, pady=5)
+        row += 1
+        self.modify_resolution_check = tk.Checkbutton(parent, text="Change Resolution to 40000", variable=self.modify_resolution_var)
+        self.modify_resolution_check.grid(row=row, column=0, columnspan=3, sticky='w', padx=5, pady=5)
+        row += 1
+        tk.Button(parent, text="Process Raw Data", command=self.process_raw_data).grid(row=row, column=0, columnspan=3, pady=10)
+        
+    def create_graph_inputs(self, parent):
+        row = 0
+        tk.Label(parent, text="Processed Data Folder:").grid(row=row, column=0, sticky='e', padx=5, pady=5)
+        self.processed_folder_entry = tk.Entry(parent, width=50)
+        self.processed_folder_entry.grid(row=row, column=1, padx=5, pady=5)
+        tk.Button(parent, text="Browse", command=self.browse_processed_folder).grid(row=row, column=2, padx=5, pady=5)
+        row += 1
+        
+        tk.Label(parent, text="Graphs Output Folder:").grid(row=row, column=0, sticky='e', padx=5, pady=5)
+        self.graphs_folder_entry = tk.Entry(parent, width=50)
+        self.graphs_folder_entry.grid(row=row, column=1, padx=5, pady=5)
+        tk.Button(parent, text="Browse", command=self.browse_graphs_folder).grid(row=row, column=2, padx=5, pady=5)
+        row += 1
+
+        tk.Label(parent, text="Trendline Numbers (min 4):").grid(row=row, column=0, sticky='e', padx=5, pady=5)
+        tk.Entry(parent, textvariable=self.trendline_number_var, width=10).grid(row=row, column=1, sticky='w', padx=5, pady=5)
+        row += 1
+        
+        tk.Label(parent, text="Graph Colour Options:").grid(row=row, column=0, sticky='e', padx=5, pady=5)
+        tk.Radiobutton(parent, text="Colour by cluster", variable=self.colour_option_var, value="Colour by cluster").grid(row=row, column=1, sticky='w', padx=5, pady=5)
+        tk.Radiobutton(parent, text="Randomize graph colour", variable=self.colour_option_var, value="Randomize graph colour").grid(row=row, column=2, sticky='w', padx=5, pady=5)
+        row += 1
+        tk.Radiobutton(parent, text="Custom color", variable=self.colour_option_var, value="Custom color", command=self.custom_color_option_changed).grid(row=row, column=1, sticky='w', padx=5, pady=5)
+        custom_colors = ["red", "green", "blue", "orange", "purple", "cyan", "magenta", "black", "gold", "olive", "teal", "navy"]
+        self.custom_color_optionmenu = tk.OptionMenu(parent, self.custom_color_var, *custom_colors)
+        self.custom_color_optionmenu.configure(state="disabled")
+        self.custom_color_optionmenu.grid(row=row, column=2, padx=5, pady=5)
+        row += 1
+
+        self.display_trendlines_check = tk.Checkbutton(parent, text="Display trendlines", variable=self.display_trendlines_var, command=self.update_save_trendlines_state)
+        self.display_trendlines_check.grid(row=row, column=0, columnspan=3, sticky='w', padx=5, pady=5)
+        row += 1
+        
+        self.save_trendlines_check = tk.Checkbutton(parent, text="Save trendlines to file", variable=self.save_trendlines_var)
+        self.save_trendlines_check.grid(row=row, column=0, columnspan=3, sticky='w', padx=5, pady=5)
+        row += 1
+
+        tk.Label(parent, text="X-axis size (Mobility):").grid(row=row, column=0, sticky='e', padx=5, pady=5)
+        tk.Entry(parent, textvariable=self.x_axis_var, width=10).grid(row=row, column=1, sticky='w', padx=5, pady=5)
+        row += 1
+
+        tk.Label(parent, text="Y-axis size (Mobility FWHM):").grid(row=row, column=0, sticky='e', padx=5, pady=5)
+        tk.Entry(parent, textvariable=self.y_axis_var, width=10).grid(row=row, column=1, sticky='w', padx=5, pady=5)
+        row += 1
+
+        tk.Button(parent, text="Generate Graphs", command=self.generate_graphs).grid(row=row, column=0, columnspan=3, pady=10)
+        
+    def custom_color_option_changed(self):
+        if self.colour_option_var.get() == "Custom color":
+            self.custom_color_optionmenu.configure(state="normal")
+        else:
+            self.custom_color_optionmenu.configure(state="disabled")
+            
+    def update_save_trendlines_state(self):
+        # Enable the save trendlines checkbutton only if Display trendlines is checked
+        if self.display_trendlines_var.get():
+            self.save_trendlines_check.configure(state="normal")
+        else:
+            self.save_trendlines_check.configure(state="disabled")
+        
+    def browse_raw_folder(self):
+        folder = filedialog.askdirectory(title=".raw Data Folder:")
+        if folder:
+            self.raw_folder_entry.delete(0, tk.END)
+            self.raw_folder_entry.insert(0, folder)
+            
+    def browse_output_folder(self):
+        folder = filedialog.askdirectory(title="Output Folder:")
+        if folder:
+            self.output_folder_entry.delete(0, tk.END)
+            self.output_folder_entry.insert(0, folder)
+            
+    def browse_processed_folder(self):
+        folder = filedialog.askdirectory(title="Processed Files:")
+        if folder:
+            self.processed_folder_entry.delete(0, tk.END)
+            self.processed_folder_entry.insert(0, folder)
+            
+    def browse_graphs_folder(self):
+        folder = filedialog.askdirectory(title="Output Folder for Graphs")
+        if folder:
+            self.graphs_folder_entry.delete(0, tk.END)
+            self.graphs_folder_entry.insert(0, folder)
+            
+    def process_raw_data(self):
+        # Process the raw data using the parameters
+        self.raw_folder = self.raw_folder_entry.get()
+        self.output_folder = self.output_folder_entry.get()
+        
+        if not self.raw_folder or not os.path.isdir(self.raw_folder):
+            messagebox.showerror("Error", "Please select a valid parent folder containing .raw sub-folders.")
+            return
+
+        if not self.output_folder:
+            messagebox.showerror("Error", "Please select or create a valid folder for the processed data.")
+            return
+        
+        if not os.path.isdir(self.output_folder):
+            try:
+                os.makedirs(self.output_folder)
+            except Exception as e:
+                messagebox.showerror("Error", f"Could not create output folder: {e}")
+                return
+
+        try:
+            self.le_threshold = int(self.le_threshold_var.get())
+            self.he_threshold = int(self.he_threshold_var.get())
+            self.ret_start = float(self.ret_start_var.get())
+            self.ret_end = float(self.ret_end_var.get())
+        except ValueError:
+            messagebox.showerror("Error", "Numeric fields must contain valid numbers.")
+            return
+        
+        try:
+            drift_start, drift_end = self.initial_trendline_var.get().split("-")
+            self.driftFWHMStart = float(drift_start)
+            self.driftFWHMEnd = float(drift_end)
+        except ValueError:
+            messagebox.showerror("Error", "Initial Trendline must be in format 'start-end'.")
+            return
+        
+        try:
+            self.lockmass_z1 = float(self.lockmass_z1_var.get())
+            if self.lockmass_z2_var.get():
+                self.lockmass_z2 = float(self.lockmass_z2_var.get())
+            else:
+                self.lockmass_z2 = None
+        except ValueError:
+            messagebox.showerror("Error", "LockMass fields must contain valid numbers.")
+            return
+        
+        # look through everything
+        self.raw_folders = []
+        for root_dir, dirs, files in os.walk(self.raw_folder):
+            for d in dirs:
+                if d.lower().endswith('.raw'):
+                    self.raw_folders.append(os.path.join(root_dir, d))
+                    
+        if not self.raw_folders:
+            messagebox.showerror("Error", "No .raw folders found in the selected folder.")
+            return
+        
+        if self.modify_resolution_var.get():
+            self.modify_resolution_in_folder(self.raw_folder, 40000)
+        
+        processed_data_folder = os.path.join(self.output_folder, "Apex3D_processed_data")
+        os.makedirs(processed_data_folder, exist_ok=True)
+        self.processed_data_folder = processed_data_folder
+        
+        # Check chosen algorithm
+        apex_mode = self.apex_mode_var.get()
+        if apex_mode == "ApexRT":
+            apex_exe = "ApexRT.exe"
+            apex_exe_path = os.path.join("C:/PLGS3.0.3/lib/apex3d", apex_exe)
+            if not os.path.isfile(apex_exe_path):
+                missing_dir_str = os.path.join("C:/PLGS3.0.3/lib/apex3d")
+                messagebox.showerror(
+                    "Error",
+                    f"ApexRT.exe could not be found in {missing_dir_str}. "
+                    "ApexRT is the newer algorithm, but does not naturally come with PLGS 3.0.3. "
+                    "It must be manually placed there by you. Please do so, or process with Apex3D."
+                )
+                return
+        else:
+            apex_exe = "Apex3d64.exe"
+            apex_exe_path = os.path.join("C:/PLGS3.0.3/lib/apex3d", apex_exe)
+
+        # Create a batch file to process each .raw folder.
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        batch_file_path = os.path.join(processed_data_folder, f"run_apex_{timestamp}.bat")
+        
+        with open(batch_file_path, 'w') as batch_file:
+            batch_file.write('@echo off\n')
+            for raw_dir in self.raw_folders:
+                raw_basename = os.path.splitext(os.path.basename(raw_dir))[0]
+                sample_output_folder = os.path.join(self.processed_data_folder, f"{raw_basename}_output")
+                sample_output_folder_batch = sample_output_folder.replace("\\", "/")
+                raw_dir_batch = raw_dir.replace("\\", "/")
+                
+                batch_file.write(f'if not exist "{sample_output_folder_batch}" mkdir "{sample_output_folder_batch}"\n')
+                command = f'"{apex_exe_path}" -pRawDirName "{raw_dir_batch}" -outputDirName "{sample_output_folder_batch}" -outputUserDirName "{sample_output_folder_batch}"'
+                command += f' -lockMassZ1 {self.lockmass_z1}'
+                if self.lockmass_z2 is not None:
+                    command += f' -lockMassZ2 {self.lockmass_z2}'
+                command += f' -lockMassToleranceAMU 0.3'
+                command += f' -leThresholdCounts {self.le_threshold}'
+                command += f' -heThresholdCounts {self.he_threshold}'
+                command += f' -startingRTMin {self.ret_start}'
+                command += f' -endingRTMin {self.ret_end}'
+                command += f' -driftFWHMStart {self.driftFWHMStart}'
+                command += f' -driftFWHMEnd {self.driftFWHMEnd}'
+                command += f' -PLGS'
+                batch_file.write(command + '\n')
+            batch_file.write('echo Apex processing completed.\n')
+            batch_file.write('pause\n')
+            
+        try:
+            subprocess.run(batch_file_path, check=True)
+        except subprocess.CalledProcessError as e:
+            messagebox.showerror("Error", f"Apex processing failed: {e}")
+            return
+        
+        messagebox.showinfo("Success", "Raw data processed successfully.")
+        
+    def generate_graphs(self):
+        """ Perform clustering into lines, replacing scikit-learn LinearRegression with np.polyfit. """
+        try:
+            n = int(self.trendline_number_var.get())
+            if n < 4:
+                raise ValueError
+            self.num_clusters = n - 1
+        except ValueError:
+            messagebox.showerror("Error", "Trendline numbers must be an integer >= 4.")
+            return
+        
+        processed_folder = self.processed_folder_entry.get()
+        if not processed_folder or not os.path.isdir(processed_folder):
+            messagebox.showerror("Error", "Please select a valid Processed Data Folder.")
+            return
+        
+        graphs_folder = self.graphs_folder_entry.get()
+        if not graphs_folder or not os.path.isdir(graphs_folder):
+            messagebox.showerror("Error", "Please select a valid Graph Output Folder.")
+            return
+        
+        try:
+            x_limit = float(self.x_axis_var.get())
+            y_limit = float(self.y_axis_var.get())
+        except ValueError:
+            messagebox.showerror("Error", "Axis size fields must contain valid numbers.")
+            return
+        
+        if self.colour_option_var.get() == "Randomize graph colour":
+            base_colors = ["red", "green", "blue", "orange", "purple", "cyan", "magenta", "black", "gold", "olive", "teal", "navy"]
+            if len(os.listdir(processed_folder)) <= len(base_colors):
+                unique_random_colors = random.sample(base_colors, len(os.listdir(processed_folder)))
+            else:
+                unique_random_colors = random.sample(base_colors, len(base_colors))
+                while len(unique_random_colors) < len(os.listdir(processed_folder)):
+                    new_color = "#%06x" % random.randint(0, 0xFFFFFF)
+                    if new_color not in unique_random_colors:
+                        unique_random_colors.append(new_color)
+        
+        
+        cmap = plt.colormaps["tab10"]
+        
+        sample_folders = [
+            os.path.join(processed_folder, d)
+            for d in os.listdir(processed_folder)
+            if os.path.isdir(os.path.join(processed_folder, d)) and d.endswith("_output")
+        ]
+        if not sample_folders:
+            messagebox.showerror("Error", "No processed sample folders found in the Processed Data Folder.")
+            return
+        
+        for idx, sample_folder in enumerate(sample_folders):
+            folder_name = os.path.basename(sample_folder)
+            raw_basename = folder_name[:-7] if folder_name.endswith("_output") else folder_name
+            
+            # Look for Apex3DIons
+            ions_file = None
+            for f in os.listdir(sample_folder):
+                if "Apex3DIons" in f:
+                    ions_file = os.path.join(sample_folder, f)
+                    break
+            if not ions_file or not os.path.isfile(ions_file):
+                print(f"Ions file not found for {raw_basename}, skipping graph.")
+                continue
+            
+            data = pd.read_csv(ions_file)
+            if not {'mobility', 'mobilityFWHM', 'inten'}.issubset(data.columns):
+                print(f"Required columns not found in sample {raw_basename}, skipping graph.")
+                continue
+            
+            # Take top 2000 points by intensity
+            data_top = data.nlargest(min(2000, len(data)), 'inten')
+            X = data_top['mobility'].values.reshape(-1, 1)
+            y = data_top['mobilityFWHM'].values
+            
+            # K-means style multi-line clustering
+            np.random.seed(42)
+            cluster_assignments = np.random.randint(0, self.num_clusters, len(X))
+            
+            max_iter = 100
+            for iteration in range(max_iter):
+                # Fit line in each cluster with np.polyfit
+                lines = []  # list of (slope, intercept)
+                for k in range(self.num_clusters):
+                    indices = np.where(cluster_assignments == k)[0]
+                    if len(indices) > 0:
+                        # X[indices] is shape (N,1), flatten for polyfit
+                        slope, intercept = np.polyfit(X[indices].ravel(), y[indices], 1)
+                    else:
+                        # If cluster is empty, set line to something invalid
+                        slope, intercept = (0, 9999999)
+                    lines.append((slope, intercept))
+                
+                # error
+                errors = np.zeros((len(X), self.num_clusters))
+                for k in range(self.num_clusters):
+                    slope_k, intercept_k = lines[k]
+                    # predicted y = slope * x + intercept
+                    predicted = slope_k * X.ravel() + intercept_k
+                    errors[:, k] = np.abs(predicted - y)
+                
+                new_assignments = np.argmin(errors, axis=1)
+                
+                if np.array_equal(cluster_assignments, new_assignments):
+                    break
+                cluster_assignments = new_assignments
+            
+            
+            X_fit = np.linspace(0, x_limit, 100)
+            
+            fig, ax = plt.subplots(figsize=(10, 6))
+            
+            # lines for final iteration
+            lines_final = []
+            for k in range(self.num_clusters):
+                indices = np.where(cluster_assignments == k)[0]
+                if len(indices) > 0:
+                    slope, intercept = np.polyfit(X[indices].ravel(), y[indices], 1)
+                    lines_final.append((slope, intercept))
+                else:
+                    lines_final.append((0, 9999999))
+            
+            # Plot clusters
+            for k, (slope_k, intercept_k) in enumerate(lines_final):
+                indices = np.where(cluster_assignments == k)[0]
+                if len(indices) > 0:
+                    # color
+                    if self.colour_option_var.get() == "Colour by cluster":
+                        cluster_colors = [cmap(i / self.num_clusters) for i in range(self.num_clusters)]
+                        color = cluster_colors[k]
+                    elif self.colour_option_var.get() == "Randomize graph colour":
+                        color = self._make_valid_color(unique_random_colors[idx])
+                    elif self.colour_option_var.get() == "Custom color":
+                        color = self._make_valid_color(self.custom_color_var.get())
+                    else:
+                        color = "black"
+                    # scatter
+                    ax.scatter(X[indices], y[indices], color=color, s=10)
+                    
+                    # trendline
+                    if self.display_trendlines_var.get():
+                        y_fit = slope_k * X_fit + intercept_k
+                        ax.plot(X_fit, y_fit, color="black")  # always black for lines
+            
+            ax.set_xlabel("Mobility", fontsize=14)
+            ax.set_ylabel("Mobility FWHM", fontsize=14)
+            ax.grid(True)
+            ax.set_xlim(0, x_limit)
+            ax.set_ylim(0, y_limit)
+            
+            fig.text(
+                0.5, 0.01,
+                f"{raw_basename} | Initial Trendline: {self.initial_trendline_var.get()}",
+                ha='center', fontsize=8, color='black'
+            )
+            
+            graph_path = os.path.join(graphs_folder, f"{raw_basename}_trendlines.png")
+            plt.savefig(graph_path, transparent=True)
+            plt.close(fig)
+            
+            # Save final line ranges if requested
+            if self.display_trendlines_var.get() and self.save_trendlines_var.get():
+                trendline_strings = []
+                for slope_k, intercept_k in lines_final:
+                    # predict at 0, at x_limit
+                    start_val = slope_k * 0 + intercept_k
+                    end_val = slope_k * x_limit + intercept_k
+                    # skip if intercept was 9999999 to cluster empty
+                    if abs(intercept_k) < 1e8:
+                        trendline_strings.append(f"{round(start_val,1)}-{round(end_val,1)}")
+                
+                trendline_text = ", ".join(trendline_strings)
+                trend_file_path = os.path.join(graphs_folder, f"{raw_basename}_trendlines.txt")
+                with open(trend_file_path, "w") as f:
+                    f.write(trendline_text)
+            
+        messagebox.showinfo("Success", f"Graphs generated successfully in:\n{graphs_folder}")
+        
+    def modify_resolution_in_folder(self, folder_path, new_resolution):
+        for root, dirs, files in os.walk(folder_path):
+            for file in files:
+                if file.endswith("_extern.inf"):
+                    file_path = os.path.join(root, file)
+                    with open(file_path, 'r') as f:
+                        lines = f.readlines()
+                    modified_lines = []
+                    for line in lines:
+                        if line.startswith("Resolution"):
+                            modified_lines.append(f"Resolution\t\t\t{new_resolution:.2f}\n")
+                        else:
+                            modified_lines.append(line)
+                    with open(file_path, 'w') as f:
+                        f.writelines(modified_lines)
+
+    def _make_valid_color(self, color_str):
+        return color_str.replace(" ", "")
+        
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = TrendlineApp(root)
+    root.mainloop()
