@@ -1,11 +1,6 @@
 # MultiPassMerger
 Process, filter and merge cyclic ion mobility mass spectrometry one- and multi-pass data using Protein Lynx Global Server executables
 
-__*Want to download the executable and learn how to use MultiPassMerger?*__
-
---> Please see the quick start tutorial on our website: https://politislab.uk/multipassmerger/
-
-
 __*Dependancies:*__
 
 - ProteinLynx Global Sever (Waters) to process the data
