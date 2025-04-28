@@ -1,3 +1,5 @@
+/* Copyright (C) 2025 Venessa Duerr. Licensed under GPL-3.0 for non-commercial use. Commercial licensing available by contacting contact@uominnovationfactory.com. */
+
 import os
 import pandas as pd
 import tkinter as tk
