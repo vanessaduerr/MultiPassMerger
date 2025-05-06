@@ -21,7 +21,8 @@ __*Important:*__
 
 -Our website has a handy tutorial: https://politislab.uk/multipassmerger/
 
--If it does not work for you or you have any questions, please leave a comment on our website, or send a E-mail to vanessa.duerr@postgrad.manchester.ac.uk
+-If it does not work for you or you have any questions, please leave a comment on our website, or send an E-mail to vanessa.duerr@postgrad.manchester.ac.uk
+
 
 __*LICENSING AGREEMENTS:*__
 
