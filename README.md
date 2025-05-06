@@ -19,6 +19,10 @@ __*Important:*__
 
 -Store all data on your local drive and not a cloud 
 
+-Our website has a handy tutorial: https://politislab.uk/multipassmerger/
+
+-If it does not work for you or you have any questions, please leave a comment on our website, or send a E-mail to vanessa.duerr@postgrad.manchester.ac.uk
+
 __*LICENSING AGREEMENTS:*__
 
 Licensing
